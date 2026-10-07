@@ -75,7 +75,6 @@ class Session:
         return mark
 
     def assert_navigating(self):
-        # Observe both liveness and the raw stdout protocol after a navigation key.
         # A ready stdout pipe means data or EOF: neither is allowed before Enter.
         deadline = time.monotonic() + 0.15
         while time.monotonic() < deadline:
@@ -249,16 +248,24 @@ class TerminalIntegration(unittest.TestCase):
         session.expect(b'src', mark)
         session.assert_navigating()
         mark = session.send(b'\t')
-        # The renderer emits cell diffs, not complete empty-state sentences.
-        # Synchronize on the new header suffix and zero-entry status instead.
+        # The new header suffix confirms entry into the empty app/src directory.
+        # Do not expect full messages or counters: unchanged cells are not emitted.
         session.expect(b'/src', mark)
-        session.expect(b'0/0', mark)
         session.assert_navigating()
-        # A Tab in an empty directory must remain a no-op, not an implicit finish.
         session.send(b'\t')
         session.assert_navigating()
         session.send(b'\x1b')
         self.assertEqual(session.finish(), (130, b''))
+
+    def test_empty_directory_tab_never_finishes(self):
+        path = self.root / 'app' / 'src'
+        self.assertEqual(list(path.iterdir()), [])
+        session = self.session(path)
+        session.assert_navigating()
+        session.send(b'\t')
+        session.assert_navigating()
+        session.send(b'\r')
+        self.assertEqual(session.finish(), (0, os.fsencode(str(path))))
 
     def test_tab_then_enter_in_one_burst_finishes_in_the_entered_directory(self):
         session = self.session()
