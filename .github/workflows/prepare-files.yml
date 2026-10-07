@@ -1,0 +1,61 @@
+# Temporary branch-only validation; removed before the feature is merged.
+name: Prepare file navigation
+on:
+  push:
+    branches: [feat/file-colors]
+    paths: [.github/workflows/prepare-files.yml]
+permissions:
+  contents: write
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: feat/file-colors
+      - run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - name: Format and compiler suggestions
+        run: |
+          cargo fmt --all
+          cargo clippy --fix --locked --allow-dirty --allow-staged --all-targets
+          cargo fmt --all
+      - name: Render actual UI fixture
+        run: |
+          cargo run --locked --example render_demo > /tmp/ii-demo.svg
+          cp /tmp/ii-demo.svg docs/assets/demo.svg
+      - name: Commit generated formatting and screenshot on feature branch only
+        if: always()
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src examples docs/assets
+          if ! git diff --cached --quiet; then
+            git commit -m 'chore: format file navigation and render real UI demo'
+            git push origin HEAD:feat/file-colors
+          fi
+      - name: Rust tests
+        if: always()
+        run: cargo test --locked --all-targets
+      - name: Strict Clippy
+        if: always()
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Release build
+        if: always()
+        run: cargo build --locked --release
+      - name: Actual terminal integration
+        if: always()
+        run: python3 scripts/test_pty.py target/release/ii
+      - name: Benchmarks
+        if: always()
+        run: cargo bench --locked --bench navigation
+      - name: Review artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: files-review
+          path: |
+            docs/assets/demo.svg
+            src/
+            examples/
+            target/release/ii
+          if-no-files-found: error

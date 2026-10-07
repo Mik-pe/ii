@@ -51,7 +51,7 @@ sys.exit(code if code >= 0 else 128 - code)
 
 
 class Session:
-    def __init__(self, path, *options):
+    def __init__(self, path, *options, preview=False):
         self.master, self.slave = pty.openpty()
         fcntl.ioctl(self.slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 100, 0, 0))
         self.transcript = bytearray()
@@ -59,7 +59,7 @@ class Session:
         try:
             self.process = subprocess.Popen(
                 [sys.executable, '-c', SUPERVISOR, str(self.report.fileno()),
-                 str(BINARY), '--no-preview', *options, str(path)],
+                 str(BINARY), *([] if preview else ['--no-preview']), *options, str(path)],
                 stdin=self.slave, stderr=self.slave, stdout=subprocess.PIPE,
                 pass_fds=(self.report.fileno(),), start_new_session=True,
                 env=dict(os.environ, TERM='xterm-256color'))
@@ -93,7 +93,6 @@ class Session:
                 raise AssertionError(f'ii exited early: {bytes(self.transcript)!r}')
 
     def finish(self):
-        # Drain stderr while waiting so a full terminal buffer cannot deadlock.
         deadline = time.monotonic() + 10
         while self.process.poll() is None:
             if time.monotonic() > deadline:
@@ -108,7 +107,6 @@ class Session:
         return result['status'], output
 
     def close(self):
-        # Also reap a native child blocked in a failing test, not only its supervisor.
         if self.process.poll() is None:
             try:
                 os.killpg(self.process.pid, signal.SIGKILL)
@@ -134,10 +132,10 @@ class TerminalIntegration(unittest.TestCase):
             session.close()
         self.temporary.cleanup()
 
-    def session(self, path=None, *options):
-        session = Session(path or self.root, *options)
+    def session(self, path=None, *options, preview=False):
+        session = Session(path or self.root, *options, preview=preview)
         self.sessions.append(session)
-        session.expect(b'app' if path is None else b'FOLDERS')
+        session.expect(b'app' if path is None else (b'FOLDERS' if '--dirs-only' in options else b'CONTENTS'))
         return session
 
     def test_arrows_and_queued_enter(self):
@@ -171,7 +169,6 @@ class TerminalIntegration(unittest.TestCase):
 
     def test_external_term_restores_terminal(self):
         session = self.session()
-        # The supervisor forwards TERM to ii, then observes its cleanup unchanged.
         session.process.send_signal(signal.SIGTERM)
         self.assertEqual(session.finish(), (130, b''))
 
@@ -181,6 +178,54 @@ class TerminalIntegration(unittest.TestCase):
         session = self.session(path, '--print0')
         session.send(b'\r')
         self.assertEqual(session.finish(), (0, os.fsencode(str(path)) + b'\0'))
+
+    def test_files_are_visible_but_right_and_tab_never_return_a_file(self):
+        (self.root / 'README.md').write_text('PRIVATE_FILE_CONTENT_NOT_FOR_THE_UI')
+        session = self.session(preview=True)
+        session.expect(b'README.md')
+        session.send(b'readme\x1b[C\t')
+        deadline = time.monotonic() + 0.2
+        while time.monotonic() < deadline:
+            session.drain()
+        self.assertIsNone(session.process.poll(), 'Tab on a file must not exit')
+        self.assertNotIn(b'PRIVATE_FILE_CONTENT_NOT_FOR_THE_UI', session.transcript)
+        session.send(b'\r')
+        self.assertEqual(session.finish(), (0, os.fsencode(str(self.root))))
+
+    def test_ctrl_f_restores_directory_navigation_after_selecting_a_file(self):
+        (self.root / 'README.md').write_text('hello')
+        session = self.session(None, '--dirs-only')
+        self.assertNotIn(b'README.md', session.transcript)
+        mark = session.send(b'\x06')
+        session.expect(b'README.md', mark)
+        # Filter selects the file; Ctrl-U clears the filter without changing it.
+        # Hiding files must then select the first folder, not keep an invalid index.
+        session.send(b'readme\x15\x06\t')
+        self.assertEqual(session.finish(), (0, os.fsencode(str(self.root / 'app'))))
+
+    def test_file_only_directory_can_be_selected_without_opening_any_file(self):
+        path = self.root / 'notes'
+        (path / 'readme.md').write_text('hello')
+        session = self.session(path)
+        session.expect(b'readme.md')
+        session.send(b'\x1b[C\t\r')
+        self.assertEqual(session.finish(), (0, os.fsencode(str(path))))
+
+    def test_directory_preview_includes_files(self):
+        (self.root / 'app' / 'Cargo.toml').write_text('[package]')
+        session = self.session(preview=True)
+        session.expect(b'Cargo.toml')
+        session.send(b'\x03')
+        self.assertEqual(session.finish(), (130, b''))
+
+    def test_no_color_mode_keeps_file_names_without_rgb_escape_sequences(self):
+        (self.root / 'main.rs').write_text('fn main() {}')
+        session = self.session(None, '--no-color')
+        session.expect(b'main.rs')
+        self.assertNotIn(b'38;2;', session.transcript)
+        self.assertNotIn(b'48;2;', session.transcript)
+        session.send(b'\x03')
+        self.assertEqual(session.finish(), (130, b''))
 
 
 if __name__ == '__main__':
