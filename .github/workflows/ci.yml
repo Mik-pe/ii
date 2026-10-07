@@ -40,6 +40,10 @@ jobs:
       - name: Shell integration
         if: runner.os == 'Linux'
         run: python3 scripts/test_shells.py
+      - name: PowerShell integration
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/test_powershell.ps1
       - name: Package release build
         run: python scripts/package.py
       - name: Build artifacts with checksums

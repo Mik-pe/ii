@@ -62,8 +62,10 @@ ii init fish | source
 **PowerShell 7 on Windows** — add to `$PROFILE`:
 
 ```powershell
-ii init powershell | Out-String | Invoke-Expression
+ii.exe init powershell | Out-String | Invoke-Expression
 ```
+
+Use **`ii.exe` for the initial setup**: PowerShell already defines `ii` as an alias for `Invoke-Item`. The generated integration removes that alias in the current/global scope and defines the navigator function instead. The original command remains available as `Invoke-Item`.
 
 Then just type:
 
@@ -156,7 +158,7 @@ cargo test --locked --all-targets
 cargo run --release -- ~/code
 ```
 
-CI builds and tests on Linux, macOS, and Windows. Unix pseudo-terminal tests exercise real key events, selected-path output, cancellation, and terminal restoration. Separate shell tests exercise Bash, Zsh, and Fish with quoting, Unicode, trailing newlines, and error handling. The Windows interactive console is not covered by the Unix PTY harness.
+CI builds and tests on Linux, macOS, and Windows. Unix pseudo-terminal tests exercise real key events, selected-path output, cancellation, and terminal restoration. Separate shell tests exercise Bash, Zsh, and Fish with quoting, Unicode, trailing newlines, and error handling. Windows tests exercise PowerShell alias resolution, setup, and informational commands; the interactive Windows console is not covered by the Unix PTY harness.
 
 See [architecture](docs/ARCHITECTURE.md) for the boundaries and invariants, and [contributing](CONTRIBUTING.md) for the change checklist. This is an initial implementation; broader real-terminal testing should precede a stable release.
 
