@@ -1,11 +1,3 @@
-use std::env;
-use std::ffi::OsString;
-use std::io::{self, IsTerminal, Write};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
-
 use crossterm::cursor::{Hide, Show};
 use crossterm::event::{
     self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind,
@@ -16,19 +8,27 @@ use crossterm::style::ResetColor;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use ratatui::{Terminal, backend::CrosstermBackend};
-
+use ii::deep::{Controller, Progress};
 use ii::filesystem::Scanner;
 use ii::filter::safe_label;
 use ii::model::Model;
 use ii::ui::{self, Theme};
+use ratatui::{Terminal, backend::CrosstermBackend};
+use std::env;
+use std::ffi::OsString;
+use std::io::{self, IsTerminal, Write};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
-const HELP: &str = "ii — two taps, any directory\n\nUSAGE\n    ii [OPTIONS] [PATH]\n    ii init <bash|zsh|fish|powershell>\n\nOPTIONS\n    -a, --hidden       Show hidden directories\n        --no-preview   Use a single directory pane\n        --no-color     Use your terminal colors (also honors NO_COLOR)\n        --print0       Terminate the selected path with NUL (for scripts)\n    -h, --help         Print this help\n    -V, --version      Print the version\n        --             Treat the remaining argument as a path\n\nKEYS\n    ↑↓ select   → open   ← parent   Enter cd here   Tab cd selected\n    Type to filter. Esc clears the filter, then cancels. Ctrl-C always cancels.\n    . toggles hidden folders. Ctrl-L refreshes. ? opens help.\n\nSHELL SETUP (once in your shell profile)\n    bash:       eval \"$(ii init bash)\"\n    zsh:        eval \"$(ii init zsh)\"\n    fish:       ii init fish | source\n    PowerShell: ii init powershell | Out-String | Invoke-Expression\n\nThe UI uses stderr. A successful selection writes only the raw absolute path\n(with no trailing newline) to stdout. Cancellation exits 130 with no path.\nA subprocess cannot change its parent directory: install the shell function.\n";
+const HELP: &str = "ii — two taps, any directory\n\nUSAGE\n    ii [OPTIONS] [PATH]\n    ii init <bash|zsh|fish|powershell>\n\nOPTIONS\n    -a, --hidden       Show hidden entries\n        --dirs-only    Start with files hidden (Ctrl-F toggles)\n        --no-preview   Use a single directory pane\n        --no-color     Use your terminal colors (also honors NO_COLOR)\n        --print0       Terminate the selected path with NUL (for scripts)\n    -h, --help         Print this help\n    -V, --version      Print the version\n        --             Treat the remaining argument as a path\n\nKEYS\n    ↑↓ select   → open folder   ← parent   Enter cd here\n    Type to filter folders and files. Ctrl-F shows/hides files. Ctrl-R searches descendant folders.\n    In deep search: Enter opens the selected result in the UI; Esc returns to browsing.\n    Files have name-based colors and type labels; they are never opened or executed.\n    Esc clears the filter, then cancels. Ctrl-C always cancels.\n    . toggles hidden entries. Ctrl-L refreshes. ? opens help.\n\nSHELL SETUP (once in your shell profile)\n    bash:       eval \"$(ii init bash)\"\n    zsh:        eval \"$(ii init zsh)\"\n    fish:       ii init fish | source\n    PowerShell: ii.exe init powershell | Out-String | Invoke-Expression\n\nPowerShell setup replaces the built-in ii alias for Invoke-Item.\nThe UI uses stderr. A successful selection writes only the raw absolute path\n(with no trailing newline) to stdout. Cancellation exits 130 with no path.\nA subprocess cannot change its parent directory: install the shell function.\n";
 
 #[derive(Default)]
 struct Options {
     path: Option<PathBuf>,
     hidden: bool,
+    dirs_only: bool,
     no_preview: bool,
     no_color: bool,
     print0: bool,
@@ -77,6 +77,10 @@ fn parse(arguments: impl IntoIterator<Item = OsString>) -> Result<Command, Strin
                     options.hidden = true;
                     continue;
                 }
+                Some("--dirs-only") => {
+                    options.dirs_only = true;
+                    continue;
+                }
                 Some("--no-preview") => {
                     options.no_preview = true;
                     continue;
@@ -118,7 +122,6 @@ fn restore_terminal() {
 }
 
 struct Session;
-
 impl Session {
     fn start() -> io::Result<Self> {
         let previous = std::panic::take_hook();
@@ -138,23 +141,16 @@ impl Session {
         Ok(session)
     }
 }
-
 impl Drop for Session {
     fn drop(&mut self) {
         restore_terminal();
     }
 }
 
-#[derive(Clone, Copy)]
-enum Finish {
-    Current,
-    Selected,
-}
-
 enum Intent {
     None,
     Navigate(PathBuf, Option<PathBuf>),
-    Finish(Finish),
+    Finish,
     Cancel,
 }
 
@@ -168,33 +164,35 @@ fn key_intent(model: &mut Model, key: KeyEvent, page: isize, home: Option<&Path>
     if key.kind == KeyEventKind::Release {
         return Intent::None;
     }
+    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+        return Intent::Cancel;
+    }
+    if model.help {
+        if matches!(key.code, KeyCode::Esc | KeyCode::Char('?')) {
+            model.help = false;
+        }
+        return Intent::None;
+    }
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         return match key.code {
-            KeyCode::Char('c' | 'd') => Intent::Cancel,
-            KeyCode::Char('u') => {
-                model.clear_query();
+            KeyCode::Char('r') => {
+                model.start_deep();
+                Intent::None
+            }
+            KeyCode::Char('l') if model.deep.is_some() => {
+                model.refresh_deep();
+                Intent::None
+            }
+            KeyCode::Char('f') => {
+                model.toggle_files();
                 Intent::None
             }
             KeyCode::Char('l') => Intent::Navigate(model.cwd.clone(), model.selected_path()),
             KeyCode::Char('g') => {
                 home.map_or(Intent::None, |path| Intent::Navigate(path.to_owned(), None))
             }
-            KeyCode::Char('n') => {
-                model.move_selection(1);
-                Intent::None
-            }
-            KeyCode::Char('p') => {
-                model.move_selection(-1);
-                Intent::None
-            }
             _ => Intent::None,
         };
-    }
-    if model.help {
-        if matches!(key.code, KeyCode::Esc | KeyCode::F(1) | KeyCode::Char('?')) {
-            model.help = false;
-        }
-        return Intent::None;
     }
     match key.code {
         KeyCode::Up => model.move_selection(-1),
@@ -203,19 +201,22 @@ fn key_intent(model: &mut Model, key: KeyEvent, page: isize, home: Option<&Path>
         KeyCode::PageDown => model.move_selection(page),
         KeyCode::Home => model.move_selection(isize::MIN),
         KeyCode::End => model.move_selection(isize::MAX),
-        KeyCode::Left => return parent(model),
-        KeyCode::Right => {
+        KeyCode::Esc if model.deep.is_some() => model.leave_deep(),
+        KeyCode::Left if model.deep.is_none() => return parent(model),
+        KeyCode::Right if model.deep.is_none() => {
             return model
-                .selected_path()
+                .directory_target()
                 .map_or(Intent::None, |path| Intent::Navigate(path, None));
         }
-        KeyCode::Backspace if model.query.is_empty() => return parent(model),
         KeyCode::Backspace => model.pop_query(),
-        KeyCode::Enter => return Intent::Finish(Finish::Current),
-        KeyCode::Tab => return Intent::Finish(Finish::Selected),
+        KeyCode::Enter if model.deep.is_some() => {
+            return model
+                .directory_target()
+                .map_or(Intent::None, |path| Intent::Navigate(path, None));
+        }
+        KeyCode::Enter => return Intent::Finish,
         KeyCode::Esc if model.query.is_empty() => return Intent::Cancel,
         KeyCode::Esc => model.clear_query(),
-        KeyCode::F(1) => model.help = true,
         KeyCode::Char('?') if model.query.is_empty() => model.help = true,
         KeyCode::Char('.') if model.query.is_empty() => model.toggle_hidden(),
         KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::ALT) => {
@@ -262,13 +263,15 @@ fn run(options: &Options) -> io::Result<Option<PathBuf>> {
     let interrupted = interrupted_flag()?;
     let navigation = Scanner::new("ii-navigation")?;
     let previews = Scanner::new("ii-preview")?;
+    let mut deep_search = Controller::default();
     let _session = Session::start()?;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stderr()))?;
     let mut model = Model::new(start, options.hidden);
+    model.dirs_only = options.dirs_only;
     let mut navigation_id = navigation.request(model.cwd.clone());
     let mut preview_id = None;
     let mut preview_deadline: Option<Instant> = None;
-    let mut finish = None;
+    let mut finish = false;
     let mut dirty = true;
     let mut size = terminal.size()?;
     let theme = Theme::new(
@@ -284,35 +287,41 @@ fn run(options: &Options) -> io::Result<Option<PathBuf>> {
             && result.path == model.cwd
         {
             match result.result {
-                Ok(listing) => model.complete_navigation(listing),
+                Ok(listing) => {
+                    model.cwd = result.resolved_path;
+                    model.complete_navigation(listing);
+                }
                 Err(error) => {
-                    finish = None;
+                    finish = false;
                     model.fail_navigation(format!("{}: {}", result.path.display(), error));
                 }
             }
             dirty = true;
         }
-        // Remember Enter during a scan instead of making the user press it again.
-        if !model.loading
-            && let Some(request) = finish.take()
-        {
-            match request {
-                Finish::Current if model.listing.is_some() => return Ok(Some(model.cwd)),
-                Finish::Selected => {
-                    if let Some(path) = model.selected_path() {
-                        model.begin_navigation(path.clone(), None);
-                        navigation_id = navigation.request(path);
-                        finish = Some(Finish::Current);
-                        dirty = true;
-                    }
-                }
-                _ => {}
+        // Enter opens a deep result; in the local view it requests completion.
+        // Keep Enter during a scan; a later key or scan failure cancels it.
+        if !model.loading && std::mem::take(&mut finish) && model.listing.is_some() {
+            return Ok(Some(model.cwd));
+        }
+        // Disabled and empty search do not create a worker or recurse.
+        match deep_search.update(model.deep_query(), Instant::now()) {
+            Ok(Some(progress)) => {
+                model.apply_deep(progress);
+                dirty = true;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                model.apply_deep(Progress {
+                    done: true,
+                    error: Some(safe_label(&error.to_string())),
+                    ..Progress::default()
+                });
+                dirty = true;
             }
         }
-
-        let preview_enabled = !options.no_preview && size.width >= 90;
+        let preview_enabled = !options.no_preview && size.width >= 90 && model.deep.is_none();
         let desired = if preview_enabled && !model.loading {
-            model.selected_path()
+            model.selected_directory()
         } else {
             None
         };
@@ -356,7 +365,11 @@ fn run(options: &Options) -> io::Result<Option<PathBuf>> {
             terminal.draw(|frame| ui::draw(frame, &mut model, theme, preview_enabled))?;
             dirty = false;
         }
-        let wait = if model.loading || model.preview_loading || preview_deadline.is_some() {
+        let wait = if model.loading
+            || model.preview_loading
+            || preview_deadline.is_some()
+            || model.deep.as_ref().is_some_and(|deep| !deep.progress.done)
+        {
             Duration::from_millis(8)
         } else {
             Duration::from_millis(250)
@@ -366,17 +379,17 @@ fn run(options: &Options) -> io::Result<Option<PathBuf>> {
         }
         let intent = match event::read()? {
             Event::Key(key) if key.kind != KeyEventKind::Release => {
-                finish = None;
+                finish = false;
                 dirty = true;
                 key_intent(
                     &mut model,
                     key,
-                    size.height.min(32).saturating_sub(9).max(1) as isize,
+                    ui::page_size(size.height) as isize,
                     home.as_deref(),
                 )
             }
             Event::Paste(text) if !model.help => {
-                finish = None;
+                finish = false;
                 model.push_query(&text);
                 dirty = true;
                 Intent::None
@@ -391,7 +404,7 @@ fn run(options: &Options) -> io::Result<Option<PathBuf>> {
         match intent {
             Intent::None => {}
             Intent::Cancel => return Ok(None),
-            Intent::Finish(request) => finish = Some(request),
+            Intent::Finish => finish = true,
             Intent::Navigate(path, preferred) => {
                 model.begin_navigation(path.clone(), preferred);
                 navigation_id = navigation.request(path);
@@ -450,18 +463,21 @@ fn main() -> std::process::ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ii::filesystem::{Entry, Listing};
 
     #[test]
     fn parsing_is_strict_but_accepts_dash_paths_after_separator() {
         assert!(parse(["--wat"].map(OsString::from)).is_err());
         assert!(parse(["a", "b"].map(OsString::from)).is_err());
         assert!(parse(["init", "nonsense"].map(OsString::from)).is_err());
-        let Command::Run(options) = parse(["--hidden", "--", "-folder"].map(OsString::from))
-            .unwrap_or_else(|_| panic!("parse failed"))
+        let Command::Run(options) =
+            parse(["--hidden", "--dirs-only", "--", "-folder"].map(OsString::from))
+                .unwrap_or_else(|_| panic!("parse failed"))
         else {
             panic!("not run")
         };
         assert!(options.hidden);
+        assert!(options.dirs_only);
         assert_eq!(options.path.unwrap(), PathBuf::from("-folder"));
     }
 
@@ -493,5 +509,320 @@ mod tests {
             key_intent(&mut model, key(KeyCode::Esc), 10, None),
             Intent::Cancel
         ));
+    }
+
+    #[test]
+    fn right_never_navigates_into_a_file_and_enter_still_finishes_here() {
+        let mut model = Model::new(PathBuf::from("/code"), false);
+        model.complete_navigation(Arc::new(Listing {
+            entries: vec![Entry::file(PathBuf::from("/code/main.rs"), false)],
+            skipped: 0,
+        }));
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        assert!(matches!(
+            key_intent(&mut model, key(KeyCode::Right), 10, None),
+            Intent::None
+        ));
+        assert!(model.message.as_deref().unwrap().contains("File selected"));
+        assert!(matches!(
+            key_intent(&mut model, key(KeyCode::Enter), 10, None),
+            Intent::Finish
+        ));
+    }
+
+    #[test]
+    fn ctrl_f_toggles_files_but_an_ordinary_f_filters_and_help_is_modal() {
+        let mut model = Model::new(PathBuf::from("/code"), false);
+        key_intent(
+            &mut model,
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL),
+            10,
+            None,
+        );
+        assert!(model.dirs_only);
+        key_intent(
+            &mut model,
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE),
+            10,
+            None,
+        );
+        assert_eq!(model.query, "f");
+        model.help = true;
+        key_intent(
+            &mut model,
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL),
+            10,
+            None,
+        );
+        assert!(model.dirs_only);
+    }
+
+    #[test]
+    fn right_navigates_without_finishing_even_with_cached_loading_rows() {
+        for loading in [false, true] {
+            let root = PathBuf::from("/code");
+            let target = root.join("app");
+            let mut model = Model::new(root, false);
+            model.complete_navigation(Arc::new(Listing {
+                entries: vec![Entry::new(target.clone(), false)],
+                skipped: 0,
+            }));
+            model.loading = loading;
+            let intent = key_intent(
+                &mut model,
+                KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
+                10,
+                None,
+            );
+            assert!(matches!(intent, Intent::Navigate(path, None) if path == target));
+        }
+    }
+
+    #[test]
+    fn right_never_queues_completion_without_a_visible_selection() {
+        let mut model = Model::new(PathBuf::from("/code"), false);
+        assert!(model.loading);
+        assert!(matches!(
+            key_intent(
+                &mut model,
+                KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
+                10,
+                None
+            ),
+            Intent::None
+        ));
+        // Empty loaded directories have exactly the same no-op behavior.
+        model.complete_navigation(Arc::new(Listing::default()));
+        assert!(matches!(
+            key_intent(
+                &mut model,
+                KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
+                10,
+                None
+            ),
+            Intent::None
+        ));
+    }
+
+    #[test]
+    fn right_keeps_file_and_special_entry_guards() {
+        use ii::filesystem::{EntryKind, FileKind};
+        for kind in [
+            EntryKind::File(FileKind::Code),
+            EntryKind::UnresolvedLink,
+            EntryKind::Special,
+        ] {
+            let root = PathBuf::from("/code");
+            let mut model = Model::new(root.clone(), false);
+            model.complete_navigation(Arc::new(Listing {
+                entries: vec![Entry::with_kind(root.join("entry"), false, kind)],
+                skipped: 0,
+            }));
+            assert!(matches!(
+                key_intent(
+                    &mut model,
+                    KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
+                    10,
+                    None
+                ),
+                Intent::None
+            ));
+            assert!(model.message.is_some());
+            assert_eq!(model.cwd, root);
+        }
+    }
+
+    #[test]
+    fn only_enter_requests_completion_and_help_blocks_it() {
+        for code in [
+            KeyCode::Enter,
+            KeyCode::Tab,
+            KeyCode::Right,
+            KeyCode::Left,
+            KeyCode::Up,
+            KeyCode::Down,
+            KeyCode::Home,
+            KeyCode::End,
+            KeyCode::PageUp,
+            KeyCode::PageDown,
+            KeyCode::Backspace,
+            KeyCode::Esc,
+            KeyCode::Char('q'),
+            KeyCode::F(1),
+        ] {
+            let root = PathBuf::from("/code");
+            let mut model = Model::new(root.clone(), false);
+            model.complete_navigation(Arc::new(Listing {
+                entries: vec![Entry::new(root.join("app"), false)],
+                skipped: 0,
+            }));
+            let intent = key_intent(
+                &mut model,
+                KeyEvent::new(code, KeyModifiers::NONE),
+                10,
+                None,
+            );
+            assert_eq!(matches!(intent, Intent::Finish), code == KeyCode::Enter);
+            model.help = true;
+            assert!(matches!(
+                key_intent(
+                    &mut model,
+                    KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                    10,
+                    None
+                ),
+                Intent::None
+            ));
+        }
+        let mut loading = Model::new(PathBuf::from("/code"), false);
+        assert!(matches!(
+            key_intent(
+                &mut loading,
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                10,
+                None
+            ),
+            Intent::Finish
+        ));
+    }
+
+    #[test]
+    fn removed_shortcuts_do_not_navigate_clear_filter_move_or_cancel() {
+        let root = PathBuf::from("/code");
+        let mut model = Model::new(root.clone(), false);
+        model.complete_navigation(Arc::new(Listing {
+            entries: vec![
+                Entry::new(root.join("apple"), false),
+                Entry::new(root.join("apricot"), false),
+            ],
+            skipped: 0,
+        }));
+        model.push_query("ap");
+        model.move_selection(1);
+        let selected = model.selected_path();
+        for key in [
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        ] {
+            assert!(matches!(
+                key_intent(&mut model, key, 10, None),
+                Intent::None
+            ));
+            assert_eq!(model.cwd, root);
+            assert_eq!(model.query, "ap");
+            assert_eq!(model.selected_path(), selected);
+            assert!(!model.help);
+        }
+        model.clear_query();
+        assert!(matches!(
+            key_intent(
+                &mut model,
+                KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+                10,
+                None
+            ),
+            Intent::None
+        ));
+        assert_eq!(model.cwd, root);
+    }
+
+    #[test]
+    fn deep_enter_navigates_to_selected_result_and_never_finishes_the_root() {
+        let root = PathBuf::from("/code");
+        let target = root.join("server/services/api");
+        let mut model = Model::new(root.clone(), false);
+        model.complete_navigation(Arc::new(Listing::default()));
+        model.start_deep();
+        model.push_query("api");
+        model.apply_deep(Progress {
+            listing: Arc::new(Listing {
+                entries: vec![
+                    Entry::new(root.join("app/api"), false),
+                    Entry::new(target.clone(), false),
+                ],
+                skipped: 0,
+            }),
+            done: true,
+            ..Progress::default()
+        });
+        model.move_selection(1);
+        for key in [
+            KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Left, KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+        ] {
+            assert!(matches!(
+                key_intent(&mut model, key, 10, None),
+                Intent::None
+            ));
+            assert!(model.deep.is_some());
+            assert_eq!(model.selected_path(), Some(target.clone()));
+        }
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        let Intent::Navigate(path, preferred) = key_intent(&mut model, enter, 10, None) else {
+            panic!("deep Enter should open the selected directory");
+        };
+        assert_eq!(path, target);
+        model.begin_navigation(path, preferred);
+        assert!(model.deep.is_none());
+        assert!(model.query.is_empty());
+        assert_eq!(model.cwd, target);
+        model.complete_navigation(Arc::new(Listing::default()));
+        assert!(matches!(
+            key_intent(&mut model, enter, 10, None),
+            Intent::Finish
+        ));
+
+        // A revised query must immediately invalidate the old target.
+        model.start_deep();
+        model.push_query("api");
+        model.apply_deep(Progress {
+            listing: Arc::new(Listing {
+                entries: vec![Entry::new(target, false)],
+                skipped: 0,
+            }),
+            done: true,
+            ..Progress::default()
+        });
+        model.push_query("missing");
+        assert!(matches!(
+            key_intent(&mut model, enter, 10, None),
+            Intent::None
+        ));
+    }
+
+    #[test]
+    fn ctrl_r_opens_search_empty_enter_stays_and_escape_restores_browsing() {
+        let root = PathBuf::from("/code");
+        let mut model = Model::new(root.clone(), false);
+        model.complete_navigation(Arc::new(Listing {
+            entries: vec![Entry::new(root.join("app"), false)],
+            skipped: 0,
+        }));
+        let plain = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        assert!(matches!(
+            key_intent(
+                &mut model,
+                KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+                10,
+                None
+            ),
+            Intent::None
+        ));
+        assert!(model.deep.is_some());
+        assert!(matches!(
+            key_intent(&mut model, plain(KeyCode::Enter), 10, None),
+            Intent::None
+        ));
+        assert!(matches!(
+            key_intent(&mut model, plain(KeyCode::Esc), 10, None),
+            Intent::None
+        ));
+        assert!(model.deep.is_none());
+        assert_eq!(model.cwd, root);
     }
 }

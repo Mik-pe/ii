@@ -27,11 +27,13 @@ The optional `justfile` wraps these commands; `just` is not a runtime or build d
 
 ## Change checklist
 
-Preserve arrow semantics, the distinction between Enter and Tab, and selection when returning to a parent. Do not use ordinary letters as navigation shortcuts while they are expected to filter. Keep slow filesystem work off the input thread and bounded: avoid whole-tree scans, one thread per keypress, and unbounded queues.
+Preserve arrow semantics and selection when returning to a parent. Right enters a directory inside the browsing UI. In deep search, Enter opens the selected result in the browsing view; in normal browsing, Enter confirms cd in the shell. Test that opening a search result stays interactive, emits no stdout path, and can be followed by cancellation. Keep one binding per action within each view. Do not use ordinary letters as navigation shortcuts while they are expected to filter. Keep slow filesystem work off the input thread and bounded: avoid automatic whole-tree scans, one thread per keypress, and unbounded queues.
 
 Never replace an original path with its display label. Do not use `eval`, wildcard expansion, or whitespace splitting on selected paths. Exercise spaces, quotes, shell metacharacters, Unicode, invalid UTF-8 on Unix, and embedded/trailing newlines when changing the output or shell protocol.
 
 For UX changes, inspect a narrow terminal, a wide terminal, an empty directory, a no-match filter, a failed directory read, a long path, and no-color mode. Update help, README, and tests together. The cover art is not a pixel-accurate UI specification.
+
+Deep search must remain opt-in and directory-only. Test inactive/empty-query laziness, cancellation and stale-query rejection, local-view restoration, pruning and all traversal/result budgets. Opening a search result must never implicitly finish or confirm the search root. Include real-terminal regressions for empty/stale results, relative start paths and deep Enter followed by confirmation or cancellation.
 
 A bug fix should include a regression test in the smallest applicable layer. Report which tests actually ran; do not describe skipped or unavailable environments as verified.
 
