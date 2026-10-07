@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="480" viewBox="0 0 1200 480" role="img" aria-label="ii file and directory navigation">
+<rect width="1200" height="480" rx="12" fill="#10181a"/>
+<g font-family="monospace" font-size="15">
+<text x="20 30" y="36" fill="#85e8c2" font-weight="700" xml:space="preserve">ii</text>
+<text x="40 50 60 70 80 90 100 110 120 130 140 150 160 170 180 190 200 210 220 230 240" y="36" fill="#cbd5e1" font-weight="400" xml:space="preserve">   /home/dev/code/app</text>
+<text x="20" y="76" fill="#85e8c2" font-weight="700" xml:space="preserve">/</text>
+<text x="40 50 60 70 80 90 100 110 120 130 140 150 160 170" y="76" fill="#8e9aa5" font-weight="400" xml:space="preserve">type to filter</text>
+<text x="20 30 40 50 60 70 80 90 100 110 120 130 140 150 160 170 180 190 200 210 220 230 240 250 260 270 280 290 300 310 320 330 340 350 360 370 380 390 400 410 420 430 440 450 460 470 480 490 500 510 520 530 540 550 560 570 580 590 600 610 620 630 640 650 660 670 680 690 700 710 720 730 740 750 760 770 780 790 800 810 820 830 840 850 860 870 880 890 900 910 920 930 940 950 960 970 980 990 1000 1010 1020 1030 1040 1050 1060 1070 1080 1090 1100 1110 1120 1130 1140 1150 1160 1170" y="116" fill="#496065" font-weight="400" xml:space="preserve">╭ CONTENTS ─────────────────────────────────────────────────────╮╭ NEXT → ─────────────────────────────────────────╮</text>
+<text x="20" y="136" fill="#496065" font-weight="400" xml:space="preserve">│</text>
+<text x="50 60 70 80 90 100 110" y="136" fill="#85e8c2" font-weight="700" xml:space="preserve">assets/</text>
+<text x="660 670" y="136" fill="#496065" font-weight="400" xml:space="preserve">││</text>
+<text x="690 700 710" y="136" fill="#85e8c2" font-weight="700" xml:space="preserve">src</text>
+<text x="1170" y="136" fill="#496065" font-weight="400" xml:space="preserve">│</text>
+<text x="20" y="156" fill="#496065" font-weight="400" xml:space="preserve">│</text>
+<text x="50 60 70 80 90" y="156" fill="#85e8c2" font-weight="700" xml:space="preserve">docs/</text>
+<text x="660 670" y="156" fill="#496065" font-weight="400" xml:space="preserve">││</text>
+<text x="690 700 710 720 730" y="156" fill="#85e8c2" font-weight="700" xml:space="preserve">core/</text>
+<text x="1170" y="156" fill="#496065" font-weight="400" xml:space="preserve">│</text>
+<text x="20" y="176" fill="#496065" font-weight="400" xml:space="preserve">│</text>
+<rect x="30" y="160" width="630" height="20" fill="#1d453b"/>
+<text x="30 40 50 60 70 80" y="176" fill="#dafff0" font-weight="700" xml:space="preserve">› src/</text>
+<text x="660 670" y="176" fill="#496065" font-weight="400" xml:space="preserve">││</text>
+<text x="690 700 710" y="176" fill="#85e8c2" font-weight="700" xml:space="preserve">ui/</text>
+<text x="1170" y="176" fill="#496065" font-weight="400" xml:space="preserve">│</text>
+<text x="20" y="196" fill="#496065" font-weight="400" xml:space="preserve">│</text>
+<text x="50 60 70 80 90 100 110 120 130 140 150 160 170" y="196" fill="#eba86b" font-weight="400" xml:space="preserve">backup.tar.gz</text>
+<text x="590 600 610 620 630 640 650" y="196" fill="#eba86b" font-weight="400" xml:space="preserve">archive</text>
+<text x="660 670" y="196" fill="#496065" font-weight="400" xml:space="preserve">││</text>
+<text x="690 700 710 720 730 740" y="196" fill="#89b4fa" font-weight="400" xml:space="preserve">lib.rs</text>
+<text x="1120 1130 1140 1150" y="196" fill="#89b4fa" font-weight="400" xml:space="preserve">code</text>
+<text x="1170" y="196" fill="#496065" font-weight="400" xml:space="preserve">│</text>
+<text x="20" y="216" fill="#496065" font-weight="400" xml:space="preserve">│</text>
+<text x="50 60 70 80 90 100 110 120 130 140" y="216" fill="#e8c67a" font-weight="400" xml:space="preserve">Cargo.lock</text>
+<text x="600 610 620 630 640 650" y="216" fill="#e8c67a" font-weight="400" xml:space="preserve">config</text>
+<text x="660 670" y="216" fill="#496065" font-weight="400" xml:space="preserve">││</text>
+<text x="690 700 710 720 730 740 750" y="216" fill="#89b4fa" font-weight="400" xml:space="preserve">main.rs</text>
+<text x="1120 1130 1140 1150" y="216" fill="#89b4fa" font-weight="400" xml:space="preserve">code</text>
+<text x="1170" y="216" fill="#496065" font-weight="400" xml:space="preserve">│</text>
+<text x="20" y="236" fill="#496065" font-weight="400" xml:space="preserve">│</text>
+<text x="50 60 70 80 90 100 110 120 130 140" y="236" fill="#e8c67a" font-weight="400" xml:space="preserve">Cargo.toml</text>
+<text x="600 610 620 630 640 650" y="236" fill="#e8c67a" font-weight="400" xml:space="preserve">config</text>
+<text x="660 670" y="236" fill="#496065" font-weight="400" xml:space="preserve">││</text>
+<text x="1170" y="236" fill="#496065" font-weight="400" xml:space="preserve">│</text>
+<text x="20" y="256" fill="#496065" font-weight="400" xml:space="preserve">│</text>
+<text x="50 60 70 80 90 100 110 120 130 140" y="256" fill="#d3a6eb" font-weight="400" xml:space="preserve">cover.webp</text>
+<text x="610 620 630 640 650" y="256" fill="#d3a6eb" font-weight="400" xml:space="preserve">media</text>
+<text x="660 670" y="256" fill="#496065" font-weight="400" xml:space="preserve">││</text>
+<text x="1170" y="256" fill="#496065" font-weight="400" xml:space="preserve">│</text>
+<text x="20" y="276" fill="#496065" font-weight="400" xml:space="preserve">│</text>
+<text x="50 60 70 80 90 100 110 120 130" y="276" fill="#cbd5e1" font-weight="400" xml:space="preserve">README.md</text>
+<text x="580 590 600 610 620 630 640 650" y="276" fill="#cbd5e1" font-weight="400" xml:space="preserve">document</text>
+<text x="660 670" y="276" fill="#496065" font-weight="400" xml:space="preserve">││</text>
+<text x="1170" y="276" fill="#496065" font-weight="400" xml:space="preserve">│</text>
+<text x="20" y="296" fill="#496065" font-weight="400" xml:space="preserve">│</text>
+<text x="660 670" y="296" fill="#496065" font-weight="400" xml:space="preserve">││</text>
+<text x="1170" y="296" fill="#496065" font-weight="400" xml:space="preserve">│</text>
+<text x="20" y="316" fill="#496065" font-weight="400" xml:space="preserve">│</text>
+<text x="660 670" y="316" fill="#496065" font-weight="400" xml:space="preserve">││</text>
+<text x="1170" y="316" fill="#496065" font-weight="400" xml:space="preserve">│</text>
+<text x="20" y="336" fill="#496065" font-weight="400" xml:space="preserve">│</text>
+<text x="660 670" y="336" fill="#496065" font-weight="400" xml:space="preserve">││</text>
+<text x="1170" y="336" fill="#496065" font-weight="400" xml:space="preserve">│</text>
+<text x="20" y="356" fill="#496065" font-weight="400" xml:space="preserve">│</text>
+<text x="660 670" y="356" fill="#496065" font-weight="400" xml:space="preserve">││</text>
+<text x="1170" y="356" fill="#496065" font-weight="400" xml:space="preserve">│</text>
+<text x="20" y="376" fill="#496065" font-weight="400" xml:space="preserve">│</text>
+<text x="660 670" y="376" fill="#496065" font-weight="400" xml:space="preserve">││</text>
+<text x="1170" y="376" fill="#496065" font-weight="400" xml:space="preserve">│</text>
+<text x="20 30 40 50 60 70 80 90 100 110 120 130 140 150 160 170 180 190 200 210 220 230 240 250 260 270 280 290 300 310 320 330 340 350 360 370 380 390 400 410 420 430 440 450 460 470 480 490 500 510 520 530 540 550 560 570 580 590 600 610 620 630 640 650 660 670 680 690 700 710 720 730 740 750 760 770 780 790 800 810 820 830 840 850 860 870 880 890 900 910 920 930 940 950 960 970 980 990 1000 1010 1020 1030 1040 1050 1060 1070 1080 1090 1100 1110 1120 1130 1140 1150 1160 1170" y="396" fill="#496065" font-weight="400" xml:space="preserve">╰───────────────────────────────────────────────────────────────╯╰─────────────────────────────────────────────────╯</text>
+<text x="20 30 40 50 60 70 80 90 100 110 120 130 140 150 160 170 180 190 200 210 220 230 240 250 260" y="416" fill="#8e9aa5" font-weight="400" xml:space="preserve">3/8   3 folders · 5 files</text>
+<text x="20 30 40 50 60 70 80 90 100 110 120 130 140 150 160 170 180 190 200 210 220 230 240 250 260 270 280 290 300 310 320 330 340 350 360 370 380 390 400 410 420 430 440 450 460 470 480 490 500 510 520 530 540 550 560 570 580 590 600 610 620 630 640 650 660 670 680 690" y="436" fill="#8e9aa5" font-weight="400" xml:space="preserve">↑↓ select  → open  ← up  Enter cd  Ctrl-R deep  Ctrl-F files  ? help</text>
+</g></svg>
