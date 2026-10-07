@@ -1,11 +1,11 @@
 //! Pure navigation state. No terminal I/O and no synchronous filesystem calls.
 
+use crate::filesystem::{Entry, EntryKind, Listing};
+use crate::filter;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use unicode_segmentation::UnicodeSegmentation;
-use crate::filesystem::{Entry, EntryKind, Listing};
-use crate::filter;
 
 const CACHE_DIRECTORIES: usize = 32;
 const CACHE_ENTRIES: usize = 100_000;
@@ -13,11 +13,17 @@ const MEMORY_DIRECTORIES: usize = 128;
 const QUERY_CHARACTERS: usize = 256;
 
 #[derive(Default)]
-struct Cache { items: VecDeque<(PathBuf, Arc<Listing>)>, entries: usize }
+struct Cache {
+    items: VecDeque<(PathBuf, Arc<Listing>)>,
+    entries: usize,
+}
 
 impl Cache {
     fn get(&mut self, path: &Path) -> Option<Arc<Listing>> {
-        let index = self.items.iter().position(|(candidate, _)| candidate == path)?;
+        let index = self
+            .items
+            .iter()
+            .position(|(candidate, _)| candidate == path)?;
         let item = self.items.remove(index)?;
         let listing = Arc::clone(&item.1);
         self.items.push_back(item);
@@ -25,12 +31,25 @@ impl Cache {
     }
 
     fn insert(&mut self, path: PathBuf, listing: Arc<Listing>) {
-        if let Some(index) = self.items.iter().position(|(candidate, _)| candidate == &path)
+        if let Some(index) = self
+            .items
+            .iter()
+            .position(|(candidate, _)| candidate == &path)
             && let Some((_, old)) = self.items.remove(index)
-        { self.entries -= old.entries.len(); }
-        if listing.entries.len() > CACHE_ENTRIES { return; }
-        while self.items.len() >= CACHE_DIRECTORIES || self.entries + listing.entries.len() > CACHE_ENTRIES {
-            if let Some((_, old)) = self.items.pop_front() { self.entries -= old.entries.len(); } else { break; }
+        {
+            self.entries -= old.entries.len();
+        }
+        if listing.entries.len() > CACHE_ENTRIES {
+            return;
+        }
+        while self.items.len() >= CACHE_DIRECTORIES
+            || self.entries + listing.entries.len() > CACHE_ENTRIES
+        {
+            if let Some((_, old)) = self.items.pop_front() {
+                self.entries -= old.entries.len();
+            } else {
+                break;
+            }
         }
         self.entries += listing.entries.len();
         self.items.push_back((path, listing));
@@ -38,11 +57,19 @@ impl Cache {
 }
 
 #[derive(Clone)]
-struct Location { path: PathBuf, listing: Arc<Listing>, selected: Option<PathBuf> }
+struct Location {
+    path: PathBuf,
+    listing: Arc<Listing>,
+    selected: Option<PathBuf>,
+}
 
 /// Recomputed only when visibility changes, never on every arrow key or render.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Counts { pub folders: usize, pub files: usize, pub other: usize }
+pub struct Counts {
+    pub folders: usize,
+    pub files: usize,
+    pub other: usize,
+}
 
 pub struct Model {
     pub cwd: PathBuf,
@@ -70,10 +97,26 @@ pub struct Model {
 impl Model {
     pub fn new(cwd: PathBuf, show_hidden: bool) -> Self {
         Self {
-            cwd, show_hidden, dirs_only: false, listing: None, visible: Vec::new(), counts: Counts::default(),
-            selected: 0, offset: 0, query: String::new(), loading: true, message: None, help: false,
-            preview_path: None, preview: None, preview_error: None, preview_loading: false,
-            cache: Cache::default(), memory: VecDeque::new(), preferred: None, fallback: None,
+            cwd,
+            show_hidden,
+            dirs_only: false,
+            listing: None,
+            visible: Vec::new(),
+            counts: Counts::default(),
+            selected: 0,
+            offset: 0,
+            query: String::new(),
+            loading: true,
+            message: None,
+            help: false,
+            preview_path: None,
+            preview: None,
+            preview_error: None,
+            preview_loading: false,
+            cache: Cache::default(),
+            memory: VecDeque::new(),
+            preferred: None,
+            fallback: None,
         }
     }
 
@@ -82,22 +125,33 @@ impl Model {
         self.listing.as_ref()?.entries.get(index)
     }
 
-    pub fn selected_path(&self) -> Option<PathBuf> { self.selected_entry().map(|entry| entry.path.clone()) }
+    pub fn selected_path(&self) -> Option<PathBuf> {
+        self.selected_entry().map(|entry| entry.path.clone())
+    }
 
     /// Used by preview scheduling: files must never be passed to a directory scan.
     pub fn selected_directory(&self) -> Option<PathBuf> {
-        self.selected_entry().filter(|entry| entry.is_dir()).map(|entry| entry.path.clone())
+        self.selected_entry()
+            .filter(|entry| entry.is_dir())
+            .map(|entry| entry.path.clone())
     }
 
     /// Right and Tab share this guard, including Tab remembered during loading.
     pub fn directory_target(&mut self) -> Option<PathBuf> {
-        if let Some(path) = self.selected_directory() { return Some(path); }
+        if let Some(path) = self.selected_directory() {
+            return Some(path);
+        }
         self.message = self.selected_entry().map(|entry| {
             match entry.kind {
-                EntryKind::UnresolvedLink => "Link target unavailable. Enter changes to the current folder.",
-                EntryKind::Special => "Special entry; not opened. Enter changes to the current folder.",
+                EntryKind::UnresolvedLink => {
+                    "Link target unavailable. Enter changes to the current folder."
+                }
+                EntryKind::Special => {
+                    "Special entry; not opened. Enter changes to the current folder."
+                }
                 _ => "File selected. Enter changes to this folder; Ctrl-F hides files.",
-            }.to_owned()
+            }
+            .to_owned()
         });
         None
     }
@@ -107,26 +161,41 @@ impl Model {
         (self.show_hidden || !entry.hidden) && (!self.dirs_only || entry.is_dir())
     }
 
-    pub fn cached(&mut self, path: &Path) -> Option<Arc<Listing>> { self.cache.get(path) }
+    pub fn cached(&mut self, path: &Path) -> Option<Arc<Listing>> {
+        self.cache.get(path)
+    }
 
-    pub fn cache_listing(&mut self, path: PathBuf, listing: Arc<Listing>) { self.cache.insert(path, listing); }
+    pub fn cache_listing(&mut self, path: PathBuf, listing: Arc<Listing>) {
+        self.cache.insert(path, listing);
+    }
 
     fn remember(&mut self) {
         if let Some(selected) = self.selected_path() {
             self.memory.retain(|(path, _)| path != &self.cwd);
             self.memory.push_back((self.cwd.clone(), selected));
-            if self.memory.len() > MEMORY_DIRECTORIES { self.memory.pop_front(); }
+            if self.memory.len() > MEMORY_DIRECTORIES {
+                self.memory.pop_front();
+            }
         }
     }
 
     /// Show cached contents immediately; a worker always revalidates the directory.
     pub fn begin_navigation(&mut self, path: PathBuf, preferred: Option<PathBuf>) {
         self.remember();
-        if !self.loading && let Some(listing) = &self.listing {
-            self.fallback = Some(Location { path: self.cwd.clone(), listing: Arc::clone(listing), selected: self.selected_path() });
+        if !self.loading
+            && let Some(listing) = &self.listing
+        {
+            self.fallback = Some(Location {
+                path: self.cwd.clone(),
+                listing: Arc::clone(listing),
+                selected: self.selected_path(),
+            });
         }
         self.preferred = preferred.or_else(|| {
-            self.memory.iter().find(|(candidate, _)| candidate == &path).map(|(_, selected)| selected.clone())
+            self.memory
+                .iter()
+                .find(|(candidate, _)| candidate == &path)
+                .map(|(_, selected)| selected.clone())
         });
         self.cwd = path;
         self.listing = self.cache.get(&self.cwd);
@@ -164,12 +233,21 @@ impl Model {
 
     /// Parent traversal explicitly selects the directory we just came out of.
     pub fn parent(&self) -> Option<(PathBuf, PathBuf)> {
-        self.cwd.parent().filter(|parent| *parent != self.cwd).map(|parent| (parent.to_owned(), self.cwd.clone()))
+        self.cwd
+            .parent()
+            .filter(|parent| *parent != self.cwd)
+            .map(|parent| (parent.to_owned(), self.cwd.clone()))
     }
 
     pub fn move_selection(&mut self, amount: isize) {
-        if self.visible.is_empty() { self.selected = 0; return; }
-        self.selected = self.selected.saturating_add_signed(amount).min(self.visible.len() - 1);
+        if self.visible.is_empty() {
+            self.selected = 0;
+            return;
+        }
+        self.selected = self
+            .selected
+            .saturating_add_signed(amount)
+            .min(self.visible.len() - 1);
         self.message = None;
     }
 
@@ -189,13 +267,16 @@ impl Model {
 
     pub fn push_query(&mut self, text: &str) {
         let remaining = QUERY_CHARACTERS.saturating_sub(self.query.chars().count());
-        self.query.extend(text.chars().filter(|ch| !ch.is_control()).take(remaining));
+        self.query
+            .extend(text.chars().filter(|ch| !ch.is_control()).take(remaining));
         self.rebuild(None);
         self.message = None;
     }
 
     pub fn pop_query(&mut self) {
-        if let Some((index, _)) = self.query.grapheme_indices(true).next_back() { self.query.truncate(index); }
+        if let Some((index, _)) = self.query.grapheme_indices(true).next_back() {
+            self.query.truncate(index);
+        }
         self.rebuild(None);
     }
 
@@ -211,16 +292,32 @@ impl Model {
         if let Some(listing) = &self.listing {
             let query = self.query.to_lowercase();
             let reveal_hidden = self.show_hidden || query.starts_with('.');
-            let allowed = |entry: &Entry| (reveal_hidden || !entry.hidden) && (!self.dirs_only || entry.is_dir());
+            let allowed = |entry: &Entry| {
+                (reveal_hidden || !entry.hidden) && (!self.dirs_only || entry.is_dir())
+            };
             if query.is_empty() {
-                self.visible.extend(listing.entries.iter().enumerate().filter(|(_, entry)| allowed(entry)).map(|(index, _)| index));
+                self.visible.extend(
+                    listing
+                        .entries
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, entry)| allowed(entry))
+                        .map(|(index, _)| index),
+                );
             } else {
-                let mut ranked: Vec<_> = listing.entries.iter().enumerate()
+                let mut ranked: Vec<_> = listing
+                    .entries
+                    .iter()
+                    .enumerate()
                     .filter(|(_, entry)| allowed(entry))
-                    .filter_map(|(index, entry)| filter::score(&entry.folded, &query).map(|score| (!entry.is_dir(), score, index)))
+                    .filter_map(|(index, entry)| {
+                        filter::score(&entry.folded, &query)
+                            .map(|score| (!entry.is_dir(), score, index))
+                    })
                     .collect();
                 ranked.sort_unstable();
-                self.visible.extend(ranked.into_iter().map(|(_, _, index)| index));
+                self.visible
+                    .extend(ranked.into_iter().map(|(_, _, index)| index));
             }
             for &index in &self.visible {
                 match listing.entries[index].kind {
@@ -229,19 +326,30 @@ impl Model {
                     _ => self.counts.other += 1,
                 }
             }
-            self.selected = preferred.and_then(|path| {
-                self.visible.iter().position(|&index| listing.entries[index].path == path)
-            }).unwrap_or(0);
-        } else { self.selected = 0; }
+            self.selected = preferred
+                .and_then(|path| {
+                    self.visible
+                        .iter()
+                        .position(|&index| listing.entries[index].path == path)
+                })
+                .unwrap_or(0);
+        } else {
+            self.selected = 0;
+        }
         self.offset = 0;
     }
 
     /// The renderer only builds visible rows, even in directories with 100k entries.
     pub fn viewport(&mut self, height: usize) -> std::ops::Range<usize> {
-        if height == 0 { return 0..0; }
+        if height == 0 {
+            return 0..0;
+        }
         self.offset = self.offset.min(self.visible.len().saturating_sub(height));
-        if self.selected < self.offset { self.offset = self.selected; }
-        else if self.selected >= self.offset + height { self.offset = self.selected + 1 - height; }
+        if self.selected < self.offset {
+            self.offset = self.selected;
+        } else if self.selected >= self.offset + height {
+            self.offset = self.selected + 1 - height;
+        }
         self.offset..(self.offset + height).min(self.visible.len())
     }
 }
@@ -251,7 +359,13 @@ mod tests {
     use super::*;
 
     fn listing(root: &Path, names: &[&str]) -> Arc<Listing> {
-        Arc::new(Listing { entries: names.iter().map(|name| Entry::new(root.join(name), false)).collect(), skipped: 0 })
+        Arc::new(Listing {
+            entries: names
+                .iter()
+                .map(|name| Entry::new(root.join(name), false))
+                .collect(),
+            skipped: 0,
+        })
     }
 
     fn model() -> Model {
@@ -264,7 +378,13 @@ mod tests {
     fn mixed_model() -> Model {
         let mut model = Model::new(PathBuf::from("/code"), false);
         model.complete_navigation(Arc::new(Listing {
-            entries: vec![Entry::new(PathBuf::from("/code/src"), false), Entry::file(PathBuf::from("/code/.env"), false), Entry::file(PathBuf::from("/code/main.rs"), false), Entry::file(PathBuf::from("/code/README.md"), false)], skipped: 0,
+            entries: vec![
+                Entry::new(PathBuf::from("/code/src"), false),
+                Entry::file(PathBuf::from("/code/.env"), false),
+                Entry::file(PathBuf::from("/code/main.rs"), false),
+                Entry::file(PathBuf::from("/code/README.md"), false),
+            ],
+            skipped: 0,
         }));
         model
     }
@@ -272,7 +392,14 @@ mod tests {
     #[test]
     fn files_are_visible_filterable_and_never_navigation_targets() {
         let mut model = mixed_model();
-        assert_eq!(model.counts, Counts { folders: 1, files: 2, other: 0 });
+        assert_eq!(
+            model.counts,
+            Counts {
+                folders: 1,
+                files: 2,
+                other: 0
+            }
+        );
         model.push_query("mnrs");
         assert_eq!(model.selected_entry().unwrap().label, "main.rs");
         assert!(model.selected_directory().is_none());
@@ -288,7 +415,14 @@ mod tests {
         let selected = model.selected_path();
         model.toggle_files();
         assert_eq!(model.selected_path(), selected);
-        assert_eq!(model.counts, Counts { folders: 1, files: 0, other: 0 });
+        assert_eq!(
+            model.counts,
+            Counts {
+                folders: 1,
+                files: 0,
+                other: 0
+            }
+        );
         model.push_query("main");
         assert!(model.visible.is_empty());
         model.toggle_files();
@@ -315,10 +449,13 @@ mod tests {
     #[test]
     fn matching_directories_still_precede_exact_file_matches() {
         let mut model = mixed_model();
-        model.listing = Some(Arc::new(Listing { entries: vec![
-            Entry::new(PathBuf::from("/code/rust-source"), false),
-            Entry::file(PathBuf::from("/code/rs"), false),
-        ], skipped: 0 }));
+        model.listing = Some(Arc::new(Listing {
+            entries: vec![
+                Entry::new(PathBuf::from("/code/rust-source"), false),
+                Entry::file(PathBuf::from("/code/rs"), false),
+            ],
+            skipped: 0,
+        }));
         model.push_query("rs");
         assert!(model.selected_entry().unwrap().is_dir());
         assert_eq!(model.visible.len(), 2);
@@ -327,7 +464,10 @@ mod tests {
     #[test]
     fn file_only_listing_is_not_an_empty_directory() {
         let mut model = Model::new(PathBuf::from("/code"), false);
-        model.complete_navigation(Arc::new(Listing { entries: vec![Entry::file(PathBuf::from("/code/a.txt"), false)], skipped: 0 }));
+        model.complete_navigation(Arc::new(Listing {
+            entries: vec![Entry::file(PathBuf::from("/code/a.txt"), false)],
+            skipped: 0,
+        }));
         assert_eq!(model.counts.files, 1);
         assert_eq!(model.visible.len(), 1);
         model.toggle_files();
@@ -416,7 +556,12 @@ mod tests {
     #[test]
     fn cache_is_bounded() {
         let mut cache = Cache::default();
-        for index in 0..100 { cache.insert(PathBuf::from(index.to_string()), Arc::new(Listing::default())); }
+        for index in 0..100 {
+            cache.insert(
+                PathBuf::from(index.to_string()),
+                Arc::new(Listing::default()),
+            );
+        }
         assert_eq!(cache.items.len(), CACHE_DIRECTORIES);
         assert!(cache.get(Path::new("0")).is_none());
         assert!(cache.get(Path::new("99")).is_some());

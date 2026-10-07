@@ -25,23 +25,43 @@ impl FileKind {
     pub fn from_path(path: &Path) -> Self {
         let name = path.file_name().unwrap_or_default().to_string_lossy();
         let name = name.to_ascii_lowercase();
-        if matches!(name.as_str(), "dockerfile" | "makefile" | "justfile" | "gemfile" | "rakefile") {
+        if matches!(
+            name.as_str(),
+            "dockerfile" | "makefile" | "justfile" | "gemfile" | "rakefile"
+        ) {
             return Self::Code;
         }
-        if matches!(name.as_str(), ".gitignore" | ".gitattributes" | ".editorconfig" | ".npmrc" | ".env")
-            || name.starts_with(".env.")
+        if matches!(
+            name.as_str(),
+            ".gitignore" | ".gitattributes" | ".editorconfig" | ".npmrc" | ".env"
+        ) || name.starts_with(".env.")
         {
             return Self::Config;
         }
-        if matches!(name.as_str(), "readme" | "license" | "licence" | "copying" | "changelog" | "authors") {
+        if matches!(
+            name.as_str(),
+            "readme" | "license" | "licence" | "copying" | "changelog" | "authors"
+        ) {
             return Self::Document;
         }
-        let extension = path.extension().unwrap_or_default().to_string_lossy().to_ascii_lowercase();
+        let extension = path
+            .extension()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_ascii_lowercase();
         match extension.as_str() {
-            "rs" | "py" | "js" | "jsx" | "ts" | "tsx" | "mjs" | "cjs" | "go" | "c" | "h" | "cc" | "cpp" | "hpp" | "cs" | "java" | "kt" | "swift" | "rb" | "php" | "lua" | "sh" | "bash" | "zsh" | "fish" | "ps1" | "bat" | "cmd" | "html" | "css" | "scss" | "vue" | "svelte" | "sql" | "zig" | "ex" | "exs" => Self::Code,
-            "toml" | "json" | "jsonc" | "yaml" | "yml" | "ini" | "cfg" | "conf" | "xml" | "lock" | "env" | "properties" => Self::Config,
-            "md" | "mdx" | "txt" | "rst" | "adoc" | "pdf" | "doc" | "docx" | "odt" | "csv" | "tsv" | "xls" | "xlsx" | "ppt" | "pptx" => Self::Document,
-            "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "avif" | "ico" | "bmp" | "tiff" | "mp3" | "wav" | "flac" | "ogg" | "m4a" | "mp4" | "mkv" | "mov" | "webm" => Self::Media,
+            "rs" | "py" | "js" | "jsx" | "ts" | "tsx" | "mjs" | "cjs" | "go" | "c" | "h" | "cc"
+            | "cpp" | "hpp" | "cs" | "java" | "kt" | "swift" | "rb" | "php" | "lua" | "sh"
+            | "bash" | "zsh" | "fish" | "ps1" | "bat" | "cmd" | "html" | "css" | "scss" | "vue"
+            | "svelte" | "sql" | "zig" | "ex" | "exs" => Self::Code,
+            "toml" | "json" | "jsonc" | "yaml" | "yml" | "ini" | "cfg" | "conf" | "xml"
+            | "lock" | "env" | "properties" => Self::Config,
+            "md" | "mdx" | "txt" | "rst" | "adoc" | "pdf" | "doc" | "docx" | "odt" | "csv"
+            | "tsv" | "xls" | "xlsx" | "ppt" | "pptx" => Self::Document,
+            "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "avif" | "ico" | "bmp" | "tiff"
+            | "mp3" | "wav" | "flac" | "ogg" | "m4a" | "mp4" | "mkv" | "mov" | "webm" => {
+                Self::Media
+            }
             "zip" | "tar" | "gz" | "bz2" | "xz" | "zst" | "7z" | "rar" | "tgz" => Self::Archive,
             _ => Self::Other,
         }
@@ -91,14 +111,26 @@ impl Entry {
     }
 
     pub fn with_kind(path: PathBuf, symlink: bool, kind: EntryKind) -> Self {
-        let name = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy();
+        let name = path
+            .file_name()
+            .unwrap_or(path.as_os_str())
+            .to_string_lossy();
         let hidden = name.starts_with('.');
         let label = safe_label(&name);
         let folded = label.to_lowercase();
-        Self { path, label, folded, hidden, symlink, kind }
+        Self {
+            path,
+            label,
+            folded,
+            hidden,
+            symlink,
+            kind,
+        }
     }
 
-    pub fn is_dir(&self) -> bool { self.kind == EntryKind::Directory }
+    pub fn is_dir(&self) -> bool {
+        self.kind == EntryKind::Directory
+    }
 
     pub fn type_label(&self) -> &'static str {
         match self.kind {
@@ -138,14 +170,22 @@ fn scan_cancellable(path: &Path, cancelled: impl Fn() -> bool) -> Option<io::Res
     };
     let mut listing = Listing::default();
     for item in directory {
-        if cancelled() { return None; }
+        if cancelled() {
+            return None;
+        }
         let item = match item {
             Ok(item) => item,
-            Err(_) => { listing.skipped += 1; continue; }
+            Err(_) => {
+                listing.skipped += 1;
+                continue;
+            }
         };
         let kind = match item.file_type() {
             Ok(kind) => kind,
-            Err(_) => { listing.skipped += 1; continue; }
+            Err(_) => {
+                listing.skipped += 1;
+                continue;
+            }
         };
         let path = item.path();
         let entry = if kind.is_symlink() {
@@ -165,15 +205,23 @@ fn scan_cancellable(path: &Path, cancelled: impl Fn() -> bool) -> Option<io::Res
         };
         listing.entries.push(entry);
     }
-    if cancelled() { return None; }
+    if cancelled() {
+        return None;
+    }
     listing.entries.sort_unstable_by(|a, b| {
-        (!a.is_dir()).cmp(&!b.is_dir()).then_with(|| a.folded.cmp(&b.folded)).then_with(|| a.path.cmp(&b.path))
+        (!a.is_dir())
+            .cmp(&!b.is_dir())
+            .then_with(|| a.folded.cmp(&b.folded))
+            .then_with(|| a.path.cmp(&b.path))
     });
     Some(Ok(listing))
 }
 
 #[derive(Debug)]
-struct Request { id: u64, path: PathBuf }
+struct Request {
+    id: u64,
+    path: PathBuf,
+}
 
 #[derive(Debug)]
 pub struct ScanResult {
@@ -183,7 +231,10 @@ pub struct ScanResult {
 }
 
 #[derive(Default)]
-struct Pending { request: Option<Request>, closed: bool }
+struct Pending {
+    request: Option<Request>,
+    closed: bool,
+}
 
 #[derive(Default)]
 struct Shared {
@@ -194,37 +245,50 @@ struct Shared {
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// One pending request and one result slot, not an unbounded queue of obsolete work.
-pub struct Scanner { shared: Arc<Shared> }
+pub struct Scanner {
+    shared: Arc<Shared>,
+}
 
 impl Scanner {
     pub fn new(name: &str) -> io::Result<Self> {
         let shared = Arc::new(Shared::default());
         let worker = Arc::clone(&shared);
-        thread::Builder::new().name(name.to_owned()).spawn(move || {
-            loop {
-                let request = {
-                    let mut pending = lock(&worker.pending);
-                    while pending.request.is_none() && !pending.closed {
-                        pending = worker.wake.wait(pending).unwrap_or_else(std::sync::PoisonError::into_inner);
+        thread::Builder::new()
+            .name(name.to_owned())
+            .spawn(move || {
+                loop {
+                    let request = {
+                        let mut pending = lock(&worker.pending);
+                        while pending.request.is_none() && !pending.closed {
+                            pending = worker
+                                .wake
+                                .wait(pending)
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        }
+                        if pending.closed {
+                            return;
+                        }
+                        pending.request.take()
+                    };
+                    let Some(request) = request else { continue };
+                    let is_obsolete = || worker.generation.load(Ordering::Acquire) != request.id;
+                    if let Some(result) = scan_cancellable(&request.path, is_obsolete)
+                        && !is_obsolete()
+                    {
+                        *lock(&worker.result) = Some(ScanResult {
+                            id: request.id,
+                            path: request.path,
+                            result: result.map(Arc::new),
+                        });
                     }
-                    if pending.closed { return; }
-                    pending.request.take()
-                };
-                let Some(request) = request else { continue };
-                let is_obsolete = || worker.generation.load(Ordering::Acquire) != request.id;
-                if let Some(result) = scan_cancellable(&request.path, is_obsolete)
-                    && !is_obsolete()
-                {
-                    *lock(&worker.result) = Some(ScanResult {
-                        id: request.id, path: request.path, result: result.map(Arc::new),
-                    });
                 }
-            }
-        })?;
+            })?;
         Ok(Self { shared })
     }
 
@@ -242,7 +306,9 @@ impl Scanner {
         *lock(&self.shared.result) = None;
     }
 
-    pub fn poll(&self) -> Option<ScanResult> { lock(&self.shared.result).take() }
+    pub fn poll(&self) -> Option<ScanResult> {
+        lock(&self.shared.result).take()
+    }
 }
 
 impl Drop for Scanner {
@@ -262,11 +328,22 @@ mod tests {
     #[test]
     fn scans_files_and_directories_with_directories_first() {
         let root = tempfile::tempdir().unwrap();
-        for name in ["zebra", "Alpha", ".hidden"] { fs::create_dir(root.path().join(name)).unwrap(); }
-        for name in ["README.md", "a.rs", ".env"] { fs::write(root.path().join(name), "").unwrap(); }
+        for name in ["zebra", "Alpha", ".hidden"] {
+            fs::create_dir(root.path().join(name)).unwrap();
+        }
+        for name in ["README.md", "a.rs", ".env"] {
+            fs::write(root.path().join(name), "").unwrap();
+        }
         let listing = scan(root.path()).unwrap();
-        let names: Vec<_> = listing.entries.iter().map(|entry| entry.label.as_str()).collect();
-        assert_eq!(names, [".hidden", "Alpha", "zebra", ".env", "a.rs", "README.md"]);
+        let names: Vec<_> = listing
+            .entries
+            .iter()
+            .map(|entry| entry.label.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            [".hidden", "Alpha", "zebra", ".env", "a.rs", "README.md"]
+        );
         assert!(listing.entries[0].hidden);
         assert!(listing.entries[..3].iter().all(Entry::is_dir));
         assert_eq!(listing.entries[4].kind, EntryKind::File(FileKind::Code));
@@ -276,13 +353,21 @@ mod tests {
     #[test]
     fn classification_is_case_insensitive_and_does_not_require_a_file() {
         for (name, kind) in [
-            ("MAIN.RS", FileKind::Code), ("Dockerfile", FileKind::Code),
-            ("justfile", FileKind::Code), ("Cargo.toml", FileKind::Config),
-            (".env.local", FileKind::Config), (".gitignore", FileKind::Config),
-            ("README", FileKind::Document), ("notes.md", FileKind::Document),
-            ("cover.WEBP", FileKind::Media), ("backup.tar.gz", FileKind::Archive),
-            ("unknown", FileKind::Other), ("README.rs", FileKind::Code),
-        ] { assert_eq!(FileKind::from_path(Path::new(name)), kind, "{name}"); }
+            ("MAIN.RS", FileKind::Code),
+            ("Dockerfile", FileKind::Code),
+            ("justfile", FileKind::Code),
+            ("Cargo.toml", FileKind::Config),
+            (".env.local", FileKind::Config),
+            (".gitignore", FileKind::Config),
+            ("README", FileKind::Document),
+            ("notes.md", FileKind::Document),
+            ("cover.WEBP", FileKind::Media),
+            ("backup.tar.gz", FileKind::Archive),
+            ("unknown", FileKind::Other),
+            ("README.rs", FileKind::Code),
+        ] {
+            assert_eq!(FileKind::from_path(Path::new(name)), kind, "{name}");
+        }
     }
 
     #[test]
@@ -300,7 +385,9 @@ mod tests {
         let expected = scanner.request(other.path().to_owned());
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            if let Some(result) = scanner.poll() && result.id == expected {
+            if let Some(result) = scanner.poll()
+                && result.id == expected
+            {
                 assert_eq!(result.path, other.path());
                 assert!(result.result.is_ok());
                 break;
@@ -321,7 +408,13 @@ mod tests {
         symlink(root.path().join("file.txt"), root.path().join("linked.txt")).unwrap();
         symlink(root.path().join("missing"), root.path().join("broken")).unwrap();
         let listing = scan(root.path()).unwrap();
-        let find = |label: &str| listing.entries.iter().find(|entry| entry.label == label).unwrap();
+        let find = |label: &str| {
+            listing
+                .entries
+                .iter()
+                .find(|entry| entry.label == label)
+                .unwrap()
+        };
         assert!(find("alias").is_dir());
         assert!(find("alias").symlink);
         assert_eq!(find("alias").path, root.path().join("alias"));
@@ -350,7 +443,10 @@ mod tests {
         use std::ffi::OsString;
         use std::os::unix::ffi::OsStringExt;
         let path = PathBuf::from(OsString::from_vec(vec![b'a', 0xff]));
-        for entry in [Entry::new(path.clone(), false), Entry::file(path.clone(), false)] {
+        for entry in [
+            Entry::new(path.clone(), false),
+            Entry::file(path.clone(), false),
+        ] {
             assert_eq!(entry.path, path);
             assert!(entry.label.contains('\u{fffd}'));
         }
