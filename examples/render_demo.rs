@@ -69,29 +69,53 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "<rect width=\"1200\" height=\"480\" rx=\"12\" fill=\"#10181a\"/>"
     )?;
     writeln!(out, "<g font-family=\"monospace\" font-size=\"15\">")?;
-    for (index, cell) in terminal.backend().buffer().content.iter().enumerate() {
-        let x = (index % 120) * 10;
-        let y = (index / 120) * 20;
-        if cell.bg != Color::Reset {
-            writeln!(
-                out,
-                "<rect x=\"{x}\" y=\"{y}\" width=\"10\" height=\"20\" fill=\"{}\"/>",
-                color(cell.bg, "#10181a")
-            )?;
-        }
-        if cell.symbol() != " " {
-            let weight = if cell.modifier.contains(Modifier::BOLD) {
-                700
-            } else {
-                400
-            };
-            writeln!(
-                out,
-                "<text x=\"{x}\" y=\"{}\" fill=\"{}\" font-weight=\"{weight}\">{}</text>",
-                y + 16,
-                color(cell.fg, "#cbd5e1"),
-                escape(cell.symbol())
-            )?;
+    // Coalesce adjacent cells with identical styles. This preserves the actual
+    // renderer's cell positions while keeping the documentation asset compact.
+    for (y, cells) in terminal.backend().buffer().content.chunks(120).enumerate() {
+        let mut start = 0;
+        while start < cells.len() {
+            let first = &cells[start];
+            let mut end = start + 1;
+            while end < cells.len() && cells[end].style() == first.style() {
+                end += 1;
+            }
+            let x = start * 10;
+            let width = (end - start) * 10;
+            let baseline = y * 20 + 16;
+            if first.bg != Color::Reset {
+                writeln!(
+                    out,
+                    "<rect x=\"{x}\" y=\"{}\" width=\"{width}\" height=\"20\" fill=\"{}\"/>",
+                    y * 20,
+                    color(first.bg, "#10181a")
+                )?;
+            }
+            let text: String = cells[start..end].iter().map(|cell| cell.symbol()).collect();
+            let text = text.trim_end_matches(' ');
+            if !text.is_empty() {
+                let positions = cells[start..end]
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(offset, cell)| {
+                        let x = (start + offset) * 10;
+                        cell.symbol().chars().map(move |_| x.to_string())
+                    })
+                    .take(text.chars().count())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let weight = if first.modifier.contains(Modifier::BOLD) {
+                    700
+                } else {
+                    400
+                };
+                writeln!(
+                    out,
+                    "<text x=\"{positions}\" y=\"{baseline}\" fill=\"{}\" font-weight=\"{weight}\" xml:space=\"preserve\">{}</text>",
+                    color(first.fg, "#cbd5e1"),
+                    escape(text)
+                )?;
+            }
+            start = end;
         }
     }
     writeln!(out, "</g></svg>")?;

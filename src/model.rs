@@ -1,5 +1,6 @@
 //! Pure navigation state. No terminal I/O and no synchronous filesystem calls.
 
+use crate::deep::{Progress, Query};
 use crate::filesystem::{Entry, EntryKind, Listing};
 use crate::filter;
 use std::collections::VecDeque;
@@ -71,6 +72,14 @@ pub struct Counts {
     pub other: usize,
 }
 
+/// Transient search view; results never enter the local listing cache.
+pub struct DeepState {
+    local: Location,
+    local_query: String,
+    local_offset: usize,
+    pub progress: Progress,
+}
+
 pub struct Model {
     pub cwd: PathBuf,
     pub listing: Option<Arc<Listing>>,
@@ -84,6 +93,8 @@ pub struct Model {
     pub loading: bool,
     pub message: Option<String>,
     pub help: bool,
+    pub deep: Option<DeepState>,
+    deep_revision: u64,
     pub preview_path: Option<PathBuf>,
     pub preview: Option<Arc<Listing>>,
     pub preview_error: Option<String>,
@@ -109,6 +120,8 @@ impl Model {
             loading: true,
             message: None,
             help: false,
+            deep: None,
+            deep_revision: 0,
             preview_path: None,
             preview: None,
             preview_error: None,
@@ -118,6 +131,87 @@ impl Model {
             preferred: None,
             fallback: None,
         }
+    }
+
+    pub fn toggle_deep(&mut self) {
+        if self.deep.is_some() {
+            self.leave_deep();
+            return;
+        }
+        if self.loading {
+            self.message = Some("Wait for the current directory before searching below it.".into());
+            return;
+        }
+        let Some(listing) = &self.listing else { return };
+        self.deep = Some(DeepState {
+            local: Location {
+                path: self.cwd.clone(),
+                listing: Arc::clone(listing),
+                selected: self.selected_path(),
+            },
+            local_query: self.query.clone(),
+            local_offset: self.offset,
+            progress: Progress::default(),
+        });
+        self.refresh_deep();
+    }
+
+    pub fn leave_deep(&mut self) {
+        let Some(deep) = self.deep.take() else { return };
+        self.cwd = deep.local.path;
+        self.listing = Some(deep.local.listing);
+        self.query = deep.local_query;
+        self.message = None;
+        self.rebuild(deep.local.selected);
+        self.offset = deep.local_offset;
+    }
+
+    pub fn refresh_deep(&mut self) {
+        if let Some(deep) = &mut self.deep {
+            self.deep_revision = self.deep_revision.wrapping_add(1);
+            deep.progress = Progress {
+                done: self.query.is_empty(),
+                ..Progress::default()
+            };
+            self.listing = Some(Arc::new(Listing::default()));
+            self.visible.clear();
+            self.counts = Counts::default();
+            self.selected = 0;
+            self.offset = 0;
+            self.message = None;
+        }
+    }
+
+    pub fn deep_query(&self) -> Option<Query> {
+        self.deep.as_ref().map(|_| Query {
+            root: self.cwd.clone(),
+            text: self.query.clone(),
+            hidden: self.show_hidden,
+            revision: self.deep_revision,
+        })
+    }
+
+    pub fn apply_deep(&mut self, progress: Progress) {
+        let selected = self.selected_path();
+        let Some(deep) = &mut self.deep else { return };
+        self.listing = Some(Arc::clone(&progress.listing));
+        self.visible = (0..progress.listing.entries.len()).collect();
+        self.counts = Counts {
+            folders: self.visible.len(),
+            files: 0,
+            other: 0,
+        };
+        self.selected = selected
+            .and_then(|path| {
+                progress
+                    .listing
+                    .entries
+                    .iter()
+                    .position(|entry| entry.path == path)
+            })
+            .unwrap_or(0);
+        // Streamed batches keep selection by original path, not shifting rank.
+        deep.progress = progress;
     }
 
     pub fn selected_entry(&self) -> Option<&Entry> {
@@ -181,6 +275,7 @@ impl Model {
 
     /// Show cached contents immediately; a worker always revalidates the directory.
     pub fn begin_navigation(&mut self, path: PathBuf, preferred: Option<PathBuf>) {
+        self.leave_deep();
         self.remember();
         if !self.loading
             && let Some(listing) = &self.listing
@@ -259,6 +354,11 @@ impl Model {
     }
 
     pub fn toggle_files(&mut self) {
+        if self.deep.is_some() {
+            self.message =
+                Some("Deep search finds folders. Esc returns to files and folders.".into());
+            return;
+        }
         let selected = self.selected_path();
         self.dirs_only = !self.dirs_only;
         self.rebuild(selected);
@@ -287,6 +387,10 @@ impl Model {
     }
 
     fn rebuild(&mut self, preferred: Option<PathBuf>) {
+        if self.deep.is_some() {
+            self.refresh_deep();
+            return;
+        }
         self.visible.clear();
         self.counts = Counts::default();
         if let Some(listing) = &self.listing {
@@ -565,5 +669,88 @@ mod tests {
         assert_eq!(cache.items.len(), CACHE_DIRECTORIES);
         assert!(cache.get(Path::new("0")).is_none());
         assert!(cache.get(Path::new("99")).is_some());
+    }
+
+    #[test]
+    fn deep_view_restores_local_selection_and_never_pollutes_cache() {
+        let mut model = mixed_model();
+        model.move_selection(2);
+        let local = model.selected_path();
+        let original = Arc::clone(model.listing.as_ref().unwrap());
+        model.toggle_deep();
+        model.push_query("api");
+        let target = model.cwd.join("server/api");
+        model.apply_deep(Progress {
+            listing: listing(&target, &["nested"]),
+            done: true,
+            ..Progress::default()
+        });
+        model.leave_deep();
+        assert_eq!(model.selected_path(), local);
+        assert!(model.query.is_empty());
+        assert!(Arc::ptr_eq(model.listing.as_ref().unwrap(), &original));
+        let cwd = model.cwd.clone();
+        assert!(Arc::ptr_eq(&model.cached(&cwd).unwrap(), &original));
+    }
+
+    #[test]
+    fn query_edits_clear_deep_targets_and_change_revision_immediately() {
+        let mut model = mixed_model();
+        model.push_query("main");
+        model.toggle_deep();
+        let first = model.deep_query().unwrap();
+        model.apply_deep(Progress {
+            listing: listing(&model.cwd, &["main/api"]),
+            ..Progress::default()
+        });
+        assert!(model.selected_directory().is_some());
+        model.push_query("nope");
+        assert!(model.selected_directory().is_none());
+        assert_ne!(model.deep_query().unwrap().revision, first.revision);
+        model.leave_deep();
+        assert_eq!(model.query, "main");
+        assert_eq!(model.selected_entry().unwrap().label, "main.rs");
+    }
+
+    #[test]
+    fn entering_deep_result_retains_normal_listing_for_rollback() {
+        let mut model = mixed_model();
+        let root = model.cwd.clone();
+        model.toggle_deep();
+        model.push_query("api");
+        model.apply_deep(Progress {
+            listing: listing(&root, &["server/api"]),
+            ..Progress::default()
+        });
+        let target = model.directory_target().unwrap();
+        model.begin_navigation(target, None);
+        assert!(model.deep.is_none());
+        model.fail_navigation("directory disappeared".into());
+        assert_eq!(model.cwd, root);
+        assert_eq!(model.counts.files, 2);
+        assert_eq!(model.counts.folders, 1);
+    }
+
+    #[test]
+    fn deep_batches_preserve_selection_and_empty_query_means_no_work() {
+        let mut model = mixed_model();
+        model.toggle_deep();
+        assert!(model.deep.as_ref().unwrap().progress.done);
+        model.push_query("api");
+        let root = model.cwd.clone();
+        model.apply_deep(Progress {
+            listing: listing(&root, &["b/api", "c/api"]),
+            ..Progress::default()
+        });
+        model.move_selection(1);
+        model.apply_deep(Progress {
+            listing: listing(&root, &["a/api", "b/api", "c/api"]),
+            done: true,
+            ..Progress::default()
+        });
+        assert_eq!(model.selected_path(), Some(root.join("c/api")));
+        model.clear_query();
+        assert!(model.selected_path().is_none());
+        assert!(model.deep.as_ref().unwrap().progress.done);
     }
 }

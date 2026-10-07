@@ -16,3 +16,4 @@ Read README.md and docs/ARCHITECTURE.md before changing behavior. This is a smal
 - Regenerate docs/assets/demo.svg with cargo run --locked --example render_demo after UI changes. The fixture uses generic names only.
 - Do not weaken tests or suppress warnings to get green checks. Report unavailable validation honestly.
 - Keep changes focused, document behavior changes, and do not claim performance without measurements.
+- Deep search is explicit Ctrl-R only. Never recurse from ordinary filtering/navigation or spawn its worker for an empty query. Keep budgets, latest-generation rejection, local-view restoration and Enter-only completion tested. Resolve parent-bearing start paths on workers before creating child entries.
