@@ -133,9 +133,8 @@ impl Model {
         }
     }
 
-    pub fn toggle_deep(&mut self) {
+    pub fn start_deep(&mut self) {
         if self.deep.is_some() {
-            self.leave_deep();
             return;
         }
         if self.loading {
@@ -230,7 +229,7 @@ impl Model {
             .map(|entry| entry.path.clone())
     }
 
-    /// Right and Tab share this directory-only navigation guard; neither finishes.
+    /// Local Right and deep-search Enter use this directory-only navigation guard.
     pub fn directory_target(&mut self) -> Option<PathBuf> {
         if let Some(path) = self.selected_directory() {
             return Some(path);
@@ -677,7 +676,7 @@ mod tests {
         model.move_selection(2);
         let local = model.selected_path();
         let original = Arc::clone(model.listing.as_ref().unwrap());
-        model.toggle_deep();
+        model.start_deep();
         model.push_query("api");
         let target = model.cwd.join("server/api");
         model.apply_deep(Progress {
@@ -697,7 +696,7 @@ mod tests {
     fn query_edits_clear_deep_targets_and_change_revision_immediately() {
         let mut model = mixed_model();
         model.push_query("main");
-        model.toggle_deep();
+        model.start_deep();
         let first = model.deep_query().unwrap();
         model.apply_deep(Progress {
             listing: listing(&model.cwd, &["main/api"]),
@@ -716,7 +715,7 @@ mod tests {
     fn entering_deep_result_retains_normal_listing_for_rollback() {
         let mut model = mixed_model();
         let root = model.cwd.clone();
-        model.toggle_deep();
+        model.start_deep();
         model.push_query("api");
         model.apply_deep(Progress {
             listing: listing(&root, &["server/api"]),
@@ -734,7 +733,7 @@ mod tests {
     #[test]
     fn deep_batches_preserve_selection_and_empty_query_means_no_work() {
         let mut model = mixed_model();
-        model.toggle_deep();
+        model.start_deep();
         assert!(model.deep.as_ref().unwrap().progress.done);
         model.push_query("api");
         let root = model.cwd.clone();

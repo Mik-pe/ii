@@ -19,9 +19,9 @@ The library boundary makes navigation and rendering testable without a terminal.
 
 ## Navigation contract
 
-The header path is the current location. Right and Tab enter a selected directory inside the UI without exiting. Only Enter finishes at the header path and returns it for the shell to cd into. Left goes to the parent and selects the directory just exited.
+The header path is the current location. Right enters a selected directory in normal browsing without exiting. Enter in deep search opens the selected result in normal browsing; Enter in normal browsing finishes at the header path and returns it for the shell to cd into. Left goes to the parent and selects the directory just exited.
 
-Files are visible and selectable by default, but are context, not actions. `EntryKind` distinguishes directories, regular files with name-based categories, unresolved links, and special entries. Right and Tab share the same input branch and call `Model::directory_target`, which returns only a directory path and otherwise supplies an explanatory message. Preview scheduling calls `selected_directory`, so a selected file cannot trigger `read_dir(file)`. The detail pane only uses already-known labels/kinds. No file contents are read and no file is executed.
+Files are visible and selectable by default, but are context, not actions. `EntryKind` distinguishes directories, regular files with name-based categories, unresolved links, and special entries. Local Right and deep-search Enter call `Model::directory_target`, which returns only a directory path and otherwise supplies an explanatory message. Preview scheduling calls `selected_directory`, so a selected file cannot trigger `read_dir(file)`. The detail pane only uses already-known labels/kinds. No file contents are read and no file is executed.
 
 Directories sort before all other entries, including during local fuzzy filtering; scores rank matches within each group. Ctrl-F toggles `dirs_only`, also available as a starting CLI flag. It uses the existing listing without new I/O, retains the query and a still-visible selection, and otherwise selects the first visible match. Hidden entries are controlled independently. The preview follows visibility settings but does not inherit the local name filter.
 
@@ -29,7 +29,7 @@ Visible folder/file/other counts are cached during model rebuilding. Arrow-key m
 
 Navigation stores selection for up to 128 directories in the session. It never writes history. Sorted order determines first-visit selection; there is no inferred likely directory that unpredictably reorders the UI.
 
-Transitions are provisional until their scan succeeds. Cached contents can appear immediately; a failed transition restores the last successful location. Only Enter received during a scan is kept as a pending finish. Tab and Right act on the currently available selected directory; without an available selection they are no-ops and never schedule completion. A later key cancels a pending finish rather than unexpectedly exiting later. The shell remains the final authority if a directory changes between scanning and cd.
+Transitions are provisional until their scan succeeds. Cached contents can appear immediately; a failed transition restores the last successful location. Only Enter received during a scan is kept as a pending finish. Right and deep-search Enter act on the currently available selected directory; without an available selection they are no-ops and never schedule completion. A later key cancels a pending finish rather than unexpectedly exiting later. The shell remains the final authority if a directory changes between scanning and cd.
 
 ## Resolved starting locations
 
@@ -49,9 +49,9 @@ A blocked filesystem call cannot be forcibly cancelled by this safe Rust impleme
 
 ## Opt-in deep search
 
-Ctrl-R enters a transient search view. It snapshots the local listing, query, selection and scroll while retaining the header as its root. Search results never enter the local listing cache. Escape, Left or Ctrl-R restores that snapshot. Beginning navigation first restores the local view so a failed deep jump rolls back to a normal directory listing, not a stale result list.
+Ctrl-R enters a transient search view. It snapshots the local listing, query, selection and scroll while retaining the header as its root. Search results never enter the local listing cache. Escape restores that snapshot. Beginning navigation first restores the local view so a failed deep jump rolls back to a normal directory listing, not a stale result list.
 
-Each query edit clears visible search targets immediately and increments a revision. Root/query/hidden/revision changes cancel old work. Streamed batches preserve selection by original path when it remains in the result set. Tab/Right navigate into a result; Enter still confirms only the header directory. Ctrl-L retries; Ctrl-F explains that deep search is directory-only rather than changing local file visibility.
+Each query edit clears visible search targets immediately and increments a revision. Root/query/hidden/revision changes cancel old work. Streamed batches preserve selection by original path when it remains in the result set. Enter navigates into the selected result without requesting completion. With no current result it does nothing, including while searching or after a query edit. Right and Left have no action in this view; repeated Ctrl-R leaves the active search intact. Ctrl-L retries; Ctrl-F explains that deep search is directory-only rather than changing local file visibility.
 
 `deep::Controller` has no worker until an explicit nonempty query survives a 100 ms debounce. Disabled or empty search performs no recursive I/O or thread creation. Normal filtering never invokes traversal. After use, the existing search worker sleeps when idle. The search worker is independent of navigation and preview workers, and the deep view suppresses previews.
 
@@ -67,7 +67,7 @@ Ratatui renders through Crossterm on stderr in the alternate screen. Only visibl
 
 Colors distinguish folders, code, configuration, documents, media, archives and unresolved links. Color is not the only cue: directories have `/`, links `↗`, unavailable links `↗!`, and wide rows have textual categories. File details repeat the category. NO_COLOR / --no-color use terminal defaults and reverse-video selection. No patched font is required. The preview appears at 90 columns; deep search uses full width for relative paths. Long labels preserve prefix and suffix within a grapheme-aware cell budget.
 
-Backspace removes a grapheme cluster. Queries are capped at 256 Unicode scalar values. Matching uses lowercase Unicode subsequences, not normalization or locale collation. Ordinary letters remain searchable, including f, r and q. Help is modal; Ctrl-C/Ctrl-D still cancel.
+Backspace removes a grapheme cluster. Queries are capped at 256 Unicode scalar values. Matching uses lowercase Unicode subsequences, not normalization or locale collation. Ordinary letters remain searchable, including f, r and q. Help is modal; Ctrl-C still cancels. Backspace only edits the query; Left is the parent-navigation key. Tab, Ctrl-N/P, Ctrl-U, Ctrl-D and F1 are unbound.
 
 ## Terminal lifetime and output invariants
 

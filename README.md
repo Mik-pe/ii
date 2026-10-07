@@ -76,9 +76,9 @@ Ordinary absolute paths preserve directory-symlink aliases. On POSIX, inputs con
 
 ## Go deep only when you ask
 
-Press **Ctrl-R**, type a folder name or relative-path subsequence, select a result, and use **Tab** or **→** to enter it inside the UI. Then press **Enter** to change your shell directory. For example, `server/api` can find `app/server/services/api`. Relative result paths distinguish equally named directories.
+Press **Ctrl-R**, type a folder name or relative-path subsequence, select a result, and press **Enter** to open it in the normal browsing view. Continue browsing, or press **Enter** again to change your shell directory. For example, `server/api` can find `app/server/services/api`. Relative result paths distinguish equally named directories.
 
-Ctrl-R can extend an existing local filter into a deep search. **Esc**, **Left**, or Ctrl-R returns to the local view with its previous filter and selection. **Ctrl-L** retries. Enter always confirms the header directory, **not** a highlighted search result; navigate into the result first. Deep search finds directories only; normal browsing still shows colored files.
+Ctrl-R can extend an existing local filter into a deep search. **Esc** returns to the local view with its previous filter and selection. **Ctrl-L** retries. In deep search, Enter opens the highlighted result without exiting or changing the shell directory. With no result selected, Enter does nothing. Deep search finds directories only; normal browsing still shows colored files.
 
 The worker is created only after a nonempty deep query survives a **100 ms debounce**. Ordinary startup, filtering, arrow navigation, and an empty deep query start no recursive scan or index. Results arrive incrementally; changing the query or leaving search invalidates old results immediately. Search has its own worker, and the deep view does not launch previews.
 
@@ -105,7 +105,7 @@ Categories are inferred from names/extensions, not file contents or executable p
 
 File-type labels appear when the list is wide enough. The wide detail pane repeats the selected file's category. Long names keep both their prefix and extension where space permits. `--no-color` or a nonempty `NO_COLOR` disables the palette; directory suffixes, labels, and reverse-video selection remain.
 
-Files can be selected and filtered, but **Right and Tab never open, execute, or try to `cd` into them**. A small hint explains the available action. **Enter still changes to the directory in the header**, even with a file selected. File details do not read the file's contents.
+Files can be selected and filtered, but **Right never opens, executes, or tries to `cd` into them**. A small hint explains the available action. **Enter still changes to the directory in the header**, even with a file selected. File details do not read the file's contents.
 
 **Ctrl-F** instantly switches between the mixed list and folders only, without a new scan. It preserves a selected directory and the current filter. Hiding a selected file safely selects the first remaining match. The same visibility setting applies to the next-directory pane.
 
@@ -116,22 +116,20 @@ Files can be selected and filtered, but **Right and Tab never open, execute, or 
 | **↑ / ↓** | Select a folder or file. |
 | **→** | Open the selected **directory**. |
 | **←** | Go up and reselect the directory you just left. |
-| **Enter** | Finish in the current directory shown in the header. |
-| **Tab** | Open the selected **directory** inside the UI, just like **→**. |
+| **Enter** | Browse the selected deep-search result; otherwise finish in the header directory. |
 | **Type** | Fuzzy-filter folders and files immediately. |
 | **Ctrl-F** | Show / hide files. |
-| **Ctrl-R** | Toggle explicit descendant-folder search. |
-| **Backspace** | Erase a grapheme; go up when the filter is empty. |
+| **Ctrl-R** | Start explicit descendant-folder search. |
+| **Backspace** | Erase a grapheme from the filter. |
 | **Esc** | Clear the filter; otherwise cancel without a directory change. |
-| **Ctrl-C / Ctrl-D** | Cancel immediately. |
+| **Ctrl-C** | Cancel immediately. |
 | **.** | Toggle hidden entries when the filter is empty. |
-| **Ctrl-U / Ctrl-L / Ctrl-G** | Clear filter / refresh directory / go home. |
+| **Ctrl-L / Ctrl-G** | Refresh directory / go home. |
 | **Home / End** | First / last visible entry. |
 | **PageUp / PageDown** | Move by a page. |
-| **Ctrl-N / Ctrl-P** | Alternative down / up bindings. |
-| **? / F1** | Toggle help. |
+| **?** | Toggle help. |
 
-**Enter is the only key that confirms a directory change in your shell.** Both `→` and `Tab` open the selected directory inside the UI and let you keep browsing. They never exit, and do nothing to files. After any number of navigation steps, `Esc` still cancels without changing the shell directory. An Enter pressed while a directory loads is remembered; navigation keys never queue a finish.
+**In normal browsing, `→` opens a directory and Enter confirms the header directory in your shell.** In deep search, Enter opens the selected result in the browsing view and Esc restores the previous local view. After navigating, Esc still cancels without changing the shell directory. An Enter pressed while a browsing directory loads is remembered; opening a search result never queues a finish. Tab, Ctrl-N/P, Ctrl-U, Ctrl-D and F1 have no bindings. Backspace only edits the filter; `←` goes up.
 
 Selection is remembered within the session, including when returning to a parent or revisiting a directory. There is no persistent history or hidden prediction model.
 

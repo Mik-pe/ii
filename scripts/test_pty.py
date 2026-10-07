@@ -75,13 +75,13 @@ class Session:
         return mark
 
     def assert_navigating(self):
-        # A ready stdout pipe means data or EOF: neither is allowed before Enter.
+        # A ready stdout pipe means data or EOF: neither is allowed while browsing.
         deadline = time.monotonic() + 0.15
         while time.monotonic() < deadline:
             self.drain()
         assert self.process.poll() is None, 'navigation unexpectedly exited the UI'
         ready, _, _ = select.select([self.process.stdout], [], [], 0)
-        assert not ready, 'navigation wrote a path or closed stdout before Enter'
+        assert not ready, 'navigation wrote a path or closed stdout before shell confirmation'
 
     def drain(self):
         ready, _, _ = select.select([self.master], [], [], 0.05)
@@ -147,6 +147,15 @@ class TerminalIntegration(unittest.TestCase):
         session.expect(b'app' if path is None else (b'FOLDERS' if '--dirs-only' in options else b'CONTENTS'))
         return session
 
+    def search(self, session, query):
+        mark = session.send(b'\x12')
+        session.expect(b'DEEP SEARCH', mark)
+        session.assert_navigating()
+        # Wait for this query's completion, not the empty search's initial "done".
+        mark = session.send(query)
+        session.expect(b'done', mark)
+        session.assert_navigating()
+
     def test_arrows_and_queued_enter(self):
         session = self.session()
         mark = session.send(b'\x1b[C')
@@ -154,21 +163,21 @@ class TerminalIntegration(unittest.TestCase):
         session.send(b'\x1b[B\x1b[C\r')
         self.assertEqual(session.finish(), (0, os.fsencode(str(self.root / 'app/tests'))))
 
-    def test_parent_remembers_selection_and_tab_stays_in_ui(self):
+    def test_parent_remembers_selection_and_right_stays_in_ui(self):
         session = self.session()
         mark = session.send(b'\x1b[F\x1b[C')
         session.expect(b'lib', mark)
         mark = session.send(b'\x1b[D')
         session.expect(b'app', mark)
-        mark = session.send(b'\t')
+        mark = session.send(b'\x1b[C')
         session.expect(b'lib', mark)
         session.assert_navigating()
         session.send(b'\r')
         self.assertEqual(session.finish(), (0, os.fsencode(str(self.root / 'tools'))))
 
-    def test_filter_then_tab(self):
+    def test_filter_then_right(self):
         session = self.session()
-        mark = session.send(b'tl\t')
+        mark = session.send(b'tl\x1b[C')
         session.expect(b'lib', mark)
         session.assert_navigating()
         session.send(b'\r')
@@ -194,15 +203,15 @@ class TerminalIntegration(unittest.TestCase):
         session.send(b'\r')
         self.assertEqual(session.finish(), (0, os.fsencode(str(path)) + b'\0'))
 
-    def test_files_are_visible_but_right_and_tab_never_return_a_file(self):
+    def test_files_are_visible_but_right_never_returns_a_file(self):
         (self.root / 'README.md').write_text('PRIVATE_FILE_CONTENT_NOT_FOR_THE_UI')
         session = self.session(preview=True)
         session.expect(b'README.md')
-        session.send(b'readme\x1b[C\t')
+        session.send(b'readme\x1b[C')
         deadline = time.monotonic() + 0.2
         while time.monotonic() < deadline:
             session.drain()
-        self.assertIsNone(session.process.poll(), 'Tab on a file must not exit')
+        self.assertIsNone(session.process.poll(), 'Right on a file must not exit')
         self.assertNotIn(b'PRIVATE_FILE_CONTENT_NOT_FOR_THE_UI', session.transcript)
         session.send(b'\r')
         self.assertEqual(session.finish(), (0, os.fsencode(str(self.root))))
@@ -213,9 +222,11 @@ class TerminalIntegration(unittest.TestCase):
         self.assertNotIn(b'README.md', session.transcript)
         mark = session.send(b'\x06')
         session.expect(b'README.md', mark)
-        # Filter selects the file; Ctrl-U clears the filter without changing it.
+        # Filter selects the file; Esc clears the filter without changing it.
         # Hiding files must then select the first folder, not keep an invalid index.
-        session.send(b'readme\x15\x06\t\r')
+        session.send(b'readme\x1b')
+        session.assert_navigating()
+        session.send(b'\x06\x1b[C\r')
         self.assertEqual(session.finish(), (0, os.fsencode(str(self.root / 'app'))))
 
     def test_file_only_directory_can_be_selected_without_opening_any_file(self):
@@ -223,7 +234,7 @@ class TerminalIntegration(unittest.TestCase):
         (path / 'readme.md').write_text('hello')
         session = self.session(path)
         session.expect(b'readme.md')
-        session.send(b'\x1b[C\t\r')
+        session.send(b'\x1b[C\r')
         self.assertEqual(session.finish(), (0, os.fsencode(str(path))))
 
     def test_directory_preview_includes_files(self):
@@ -242,39 +253,39 @@ class TerminalIntegration(unittest.TestCase):
         session.send(b'\x03')
         self.assertEqual(session.finish(), (130, b''))
 
-    def test_tab_can_navigate_multiple_levels_then_cancel_without_cd(self):
+    def test_right_can_navigate_multiple_levels_then_cancel_without_cd(self):
         session = self.session()
-        mark = session.send(b'\t')
+        mark = session.send(b'\x1b[C')
         session.expect(b'src', mark)
         session.assert_navigating()
-        mark = session.send(b'\t')
+        mark = session.send(b'\x1b[C')
         # The new header suffix confirms entry into the empty app/src directory.
         # Do not expect full messages or counters: unchanged cells are not emitted.
         session.expect(b'/src', mark)
         session.assert_navigating()
-        session.send(b'\t')
+        session.send(b'\x1b[C')
         session.assert_navigating()
         session.send(b'\x1b')
         self.assertEqual(session.finish(), (130, b''))
 
-    def test_empty_directory_tab_never_finishes(self):
+    def test_empty_directory_right_never_finishes(self):
         path = self.root / 'app' / 'src'
         self.assertEqual(list(path.iterdir()), [])
         session = self.session(path)
         session.assert_navigating()
-        session.send(b'\t')
+        session.send(b'\x1b[C')
         session.assert_navigating()
         session.send(b'\r')
         self.assertEqual(session.finish(), (0, os.fsencode(str(path))))
 
-    def test_tab_then_enter_in_one_burst_finishes_in_the_entered_directory(self):
+    def test_right_then_enter_in_one_burst_finishes_in_the_entered_directory(self):
         session = self.session()
-        session.send(b'\t\r')
+        session.send(b'\x1b[C\r')
         self.assertEqual(session.finish(), (0, os.fsencode(str(self.root / 'app'))))
 
-    def test_tab_then_right_can_continue_navigation_before_enter(self):
+    def test_right_can_continue_navigation_before_enter(self):
         session = self.session()
-        mark = session.send(b'\t')
+        mark = session.send(b'\x1b[C')
         session.expect(b'src', mark)
         session.assert_navigating()
         session.send(b'\x1b[B\x1b[C\r')
@@ -284,7 +295,7 @@ class TerminalIntegration(unittest.TestCase):
         session = Session(Path('..'), cwd=self.root / 'app')
         self.sessions.append(session)
         session.expect(b'tools')
-        mark = session.send(b'\t')
+        mark = session.send(b'\x1b[C')
         session.expect(b'src', mark)
         session.assert_navigating()
         session.send(b'\x1b[D\r')
@@ -297,7 +308,7 @@ class TerminalIntegration(unittest.TestCase):
         session.send(b'\r')
         self.assertEqual(session.finish(), (0, os.fsencode(str(self.root.resolve()))))
 
-    def test_deep_search_finds_descendant_and_tab_stays_interactive(self):
+    def test_deep_search_finds_descendant_and_enter_opens_the_view(self):
         target = self.root / 'app' / 'server' / 'services' / 'endpoints'
         target.mkdir(parents=True)
         session = self.session()
@@ -305,7 +316,8 @@ class TerminalIntegration(unittest.TestCase):
         session.expect(b'DEEP SEARCH', mark)
         session.expect(b'done', mark)
         session.assert_navigating()
-        session.send(b'\t')
+        mark = session.send(b'\r')
+        session.expect(b'/endpoints', mark)
         session.assert_navigating()
         session.send(b'\r')
         self.assertEqual(session.finish(), (0, os.fsencode(str(target))))
@@ -313,7 +325,7 @@ class TerminalIntegration(unittest.TestCase):
     def test_plain_filter_does_not_search_recursively(self):
         (self.root / 'app' / 'only-deep-match').mkdir()
         session = self.session()
-        session.send(b'only-deep-match\t\r')
+        session.send(b'only-deep-match\x1b[C\r')
         self.assertEqual(session.finish(), (0, os.fsencode(str(self.root))))
 
     def test_escape_from_deep_search_restores_previous_selection(self):
@@ -324,7 +336,7 @@ class TerminalIntegration(unittest.TestCase):
         session.assert_navigating()
         session.send(b'\x1b')
         session.assert_navigating()
-        session.send(b'\t\r')
+        session.send(b'\x1b[C\r')
         self.assertEqual(session.finish(), (0, os.fsencode(str(self.root / 'tools'))))
 
     def test_deep_query_change_clears_stale_navigation_targets(self):
@@ -333,21 +345,71 @@ class TerminalIntegration(unittest.TestCase):
         mark = session.send(b'\x12api')
         session.expect(b'done', mark)
         session.assert_navigating()
-        session.send(b'\x15zzzz\t\r')
-        self.assertEqual(session.finish(), (0, os.fsencode(str(self.root))))
-
-    def test_enter_in_search_only_confirms_header_not_selected_result(self):
-        (self.root / 'app' / 'server' / 'api').mkdir(parents=True)
-        session = self.session()
-        mark = session.send(b'\x12api')
-        session.expect(b'done', mark)
+        session.send(b'\x7f\x7f\x7fzzzz\r')
+        session.assert_navigating()
+        session.send(b'\x1b')
+        session.assert_navigating()
         session.send(b'\r')
         self.assertEqual(session.finish(), (0, os.fsencode(str(self.root))))
+
+    def test_enter_in_search_opens_selected_result_then_cancel_keeps_shell(self):
+        (self.root / 'app' / 'server' / 'api').mkdir(parents=True)
+        session = self.session()
+        self.search(session, b'api')
+        mark = session.send(b'\r')
+        session.expect(b'/api', mark)
+        session.assert_navigating()
+        session.send(b'\x1b')
+        self.assertEqual(session.finish(), (130, b''))
 
     def test_deep_search_can_be_cancelled_without_cd(self):
         session = self.session()
         session.send(b'\x12anything\x03')
         self.assertEqual(session.finish(), (130, b''))
+
+    def test_tab_is_unbound_and_does_not_navigate_or_finish(self):
+        session = self.session()
+        session.send(b'\t')
+        session.assert_navigating()
+        session.send(b'\r')
+        self.assertEqual(session.finish(), (0, os.fsencode(str(self.root))))
+
+    def test_empty_and_unmatched_deep_enter_stays_in_search(self):
+        session = self.session()
+        mark = session.send(b'\x12\r')
+        session.expect(b'DEEP SEARCH', mark)
+        session.assert_navigating()
+        mark = session.send(b'no-such-directory')
+        session.expect(b'done', mark)
+        session.send(b'\r')
+        session.assert_navigating()
+        session.send(b'\x03')
+        self.assertEqual(session.finish(), (130, b''))
+
+    def test_deep_enter_uses_selection_and_allows_further_browsing(self):
+        (self.root / 'app' / 'api').mkdir()
+        target = self.root / 'tools' / 'api'
+        (target / 'child').mkdir(parents=True)
+        session = self.session()
+        self.search(session, b'api')
+        # app/api ranks first; Down selects tools/api.
+        mark = session.send(b'\x1b[B\r')
+        session.expect(b'child', mark)
+        session.assert_navigating()
+        session.send(b'\x1b[C\r')
+        self.assertEqual(session.finish(), (0, os.fsencode(str(target / 'child'))))
+
+    def test_failed_deep_jump_restores_local_view_without_finishing(self):
+        target = self.root / 'app' / 'api'
+        target.mkdir()
+        session = self.session()
+        self.search(session, b'api')
+        target.rmdir()
+        mark = session.send(b'\r')
+        session.expect(b'No such file', mark)
+        session.assert_navigating()
+        session.send(b'\x1b[C\r')
+        self.assertEqual(session.finish(), (0, os.fsencode(str(self.root / 'app'))))
 
 
 if __name__ == '__main__':

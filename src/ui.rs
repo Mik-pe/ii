@@ -358,15 +358,15 @@ pub fn draw(frame: &mut Frame<'_>, model: &mut Model, theme: Theme, preview_enab
     frame.render_widget(Paragraph::new(text), status);
     let file_selected = model.selected_entry().is_some_and(|entry| !entry.is_dir());
     let hints = if model.deep.is_some() {
-        "↑↓ select  Tab/→ open result  Enter cd here  Esc back"
+        "↑↓ select  Enter open result  Esc back"
     } else if keys.width >= 85 && !file_selected {
-        "↑↓ select  →/Tab open  ← up  Enter cd  Ctrl-R deep  Ctrl-F files  ? help"
+        "↑↓ select  → open  ← up  Enter cd  Ctrl-R deep  Ctrl-F files  ? help"
     } else if file_selected && keys.width >= 52 {
         "↑↓ select  ← up  Enter cd here  Ctrl-F files  ? help"
     } else if file_selected {
         "↑↓ select  ← up  Enter cd  ? help"
     } else {
-        "↑↓ select  →/Tab in ← up  Enter cd  ? help"
+        "↑↓ select  → in ← up  Enter cd  ? help"
     };
     frame.render_widget(Paragraph::new(hints).style(theme.muted), keys);
     if model.help {
@@ -477,21 +477,19 @@ fn draw_help(frame: &mut Frame<'_>, area: Rect, theme: Theme) {
         "↑ / ↓          Select a folder or file",
         "→              Open selected folder (never a file)",
         "←              Parent (keep the folder selected)",
-        "Enter          Finish in the directory in the header",
-        "Tab            Open selected folder (stay in UI)",
+        "Enter          cd here; in deep search, open result",
         "Type           Fuzzy-filter folders and files",
-        "Backspace      Erase a character; parent if filter is empty",
+        "Backspace      Erase a character from the filter",
         "Esc            Clear filter; otherwise cancel without cd",
-        "Ctrl-C / Ctrl-D Cancel immediately",
+        "Ctrl-C         Cancel immediately",
         "Ctrl-F         Show / hide files (directories stay first)",
         "Ctrl-R         Deep folder search; Esc returns to browsing",
         ".              Toggle hidden entries when filter is empty",
-        "Ctrl-U         Clear the filter",
         "Ctrl-L         Refresh the current directory",
         "Ctrl-G         Home directory",
         "Home / End     First / last entry",
         "PageUp / Down  Move by a page",
-        "? / F1         Toggle this help",
+        "?              Toggle this help",
         "",
         "File categories are name-based. No file is opened or executed.",
     ];
@@ -692,7 +690,7 @@ mod tests {
     fn deep_view_has_relative_paths_and_explicit_limit_and_completion_hints() {
         let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
         let mut model = mixed_model();
-        model.toggle_deep();
+        model.start_deep();
         model.push_query("api");
         let mut entry = Entry::new(PathBuf::from("/code/server/services/api"), false);
         entry.label = "server/services/api".into();
@@ -713,6 +711,6 @@ mod tests {
         assert!(rendered.contains("DEEP SEARCH"));
         assert!(rendered.contains("server/services/api"));
         assert!(rendered.contains("limited"));
-        assert!(rendered.contains("Enter cd here"));
+        assert!(rendered.contains("Enter open result"));
     }
 }
