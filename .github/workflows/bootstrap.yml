@@ -1,0 +1,41 @@
+# One-time repository initialization. Can be removed after Cargo.lock is committed.
+name: Bootstrap formatting and lockfile
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/bootstrap.yml]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: main
+      - run: rustup toolchain install stable --profile minimal --component rustfmt
+      - name: Format and resolve dependencies
+        run: |
+          cargo fmt --all
+          cargo generate-lockfile
+      - name: Commit generated files without rewriting history
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Cargo.lock src tests benches
+          if ! git diff --cached --quiet; then
+            git commit -m 'chore: format Rust sources and lock dependencies'
+            git push origin HEAD:main
+          fi
+      - name: Compile and test
+        run: cargo test --locked --all-targets
+      - name: Check lints
+        if: always()
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Build release
+        if: always()
+        run: cargo build --locked --release
+      - name: Real terminal tests
+        if: success()
+        run: python3 scripts/test_pty.py target/release/ii

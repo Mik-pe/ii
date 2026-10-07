@@ -1,0 +1,52 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  rust:
+    name: Rust (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Toolchain
+        run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Tests
+        if: always()
+        run: cargo test --all-targets
+      - name: Clippy
+        if: always()
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Build
+        if: always()
+        run: cargo build --release
+      - name: Real terminal integration
+        if: runner.os != 'Windows' && success()
+        run: python3 scripts/test_pty.py target/release/ii
+      - name: Install shells
+        if: runner.os == 'Linux' && success()
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq zsh fish
+      - name: Shell integration
+        if: runner.os == 'Linux' && success()
+        run: python3 scripts/test_shells.py
+      - name: Binary artifact
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ii-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            target/release/ii
+            target/release/ii.exe
+          if-no-files-found: error
