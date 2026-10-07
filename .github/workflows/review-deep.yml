@@ -1,0 +1,55 @@
+# Temporary read-only review job. No credentials persisted and no repository writes.
+name: Review deep search
+on:
+  push:
+    branches: [feat/resolved-paths-deep-search]
+permissions:
+  contents: read
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - name: Format review copy
+        run: cargo fmt --all
+      - name: Rust tests
+        run: cargo test --locked --all-targets
+      - name: Lints
+        if: always()
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Release and terminal checks
+        run: |
+          cargo build --locked --release
+          python3 scripts/test_pty.py target/release/ii
+      - name: Render UI fixture
+        if: always()
+        run: cargo run --locked --example render_demo > docs/assets/demo.svg
+      - name: Copy formatter for local source formatting
+        if: always()
+        run: |
+          mkdir -p review-tools
+          cp "$(rustup which rustfmt)" review-tools/rustfmt
+      - name: Review artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: deep-search-review
+          path: |
+            src/
+            tests/
+            scripts/
+            examples/
+            benches/
+            shell/
+            docs/
+            README.md
+            AGENTS.md
+            CONTRIBUTING.md
+            Cargo.toml
+            Cargo.lock
+            review-tools/rustfmt
+            target/release/ii
+          if-no-files-found: error
