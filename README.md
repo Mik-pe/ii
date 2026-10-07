@@ -68,6 +68,24 @@ ii --no-preview       # Always use one pane.
 
 Setup evaluates only the shell integration emitted by the installed binary. Directory names are **never evaluated as shell code**.
 
+## Start at a real location
+
+`ii ..` starts at the parent directory, not a path ending in `/..`. `ii ../..` and `ii ./app/../docs` are resolved before child paths are built, so the header, parent navigation, cache and output agree. Resolution runs on the filesystem worker, not the input thread.
+
+Ordinary absolute paths preserve directory-symlink aliases. On POSIX, inputs containing `..` use the filesystem to resolve the physical parent, including `symlink/..`; this is not shell-specific logical `$PWD` rewriting. Windows uses native absolute-path rules. Missing or invalid locations report errors rather than producing a fake destination.
+
+## Go deep only when you ask
+
+Press **Ctrl-R**, type a folder name or relative-path subsequence, select a result, and use **Tab** or **→** to enter it inside the UI. Then press **Enter** to change your shell directory. For example, `server/api` can find `app/server/services/api`. Relative result paths distinguish equally named directories.
+
+Ctrl-R can extend an existing local filter into a deep search. **Esc**, **Left**, or Ctrl-R returns to the local view with its previous filter and selection. **Ctrl-L** retries. Enter always confirms the header directory, **not** a highlighted search result; navigate into the result first. Deep search finds directories only; normal browsing still shows colored files.
+
+The worker is created only after a nonempty deep query survives a **100 ms debounce**. Ordinary startup, filtering, arrow navigation, and an empty deep query start no recursive scan or index. Results arrive incrementally; changing the query or leaving search invalidates old results immediately. Search has its own worker, and the deep view does not launch previews.
+
+Queries are bounded: **200 displayed results, 100,000 inspected entries, 10,000 directories, depth 32, 4,096 pending directories, and a 2-second cooperative time budget**. Limited searches say so. Navigate to a narrower root and retry to explore omitted branches. An operating-system filesystem call can block beyond that budget; input and cancellation remain separate, but filesystem contention is not a zero-latency guarantee.
+
+Traversal skips hidden subtrees unless hidden entries are enabled. It does not deliberately follow symlinks, and prunes descendants of `.git`, `.hg`, `.svn`, `node_modules`, `target`, `.venv`, `venv`, `__pycache__`, and `.cache`. Those roots can still match when visible; navigate into one to search it explicitly. These are fixed exclusions, **not full `.gitignore` support**. No file contents are read and nothing is persisted. This is a navigator, not a filesystem sandbox: concurrent directory replacement can race with traversal.
+
 ## Files as context, not distractions
 
 Directories always come first, including during filtering. Within each group, entries are sorted case-insensitively; filtering ranks fuzzy matches within that group. A file match never displaces a matching directory above it.
@@ -102,6 +120,7 @@ Files can be selected and filtered, but **Right and Tab never open, execute, or 
 | **Tab** | Open the selected **directory** inside the UI, just like **→**. |
 | **Type** | Fuzzy-filter folders and files immediately. |
 | **Ctrl-F** | Show / hide files. |
+| **Ctrl-R** | Toggle explicit descendant-folder search. |
 | **Backspace** | Erase a grapheme; go up when the filter is empty. |
 | **Esc** | Clear the filter; otherwise cancel without a directory change. |
 | **Ctrl-C / Ctrl-D** | Cancel immediately. |
@@ -116,11 +135,11 @@ Files can be selected and filtered, but **Right and Tab never open, execute, or 
 
 Selection is remembered within the session, including when returning to a parent or revisiting a directory. There is no persistent history or hidden prediction model.
 
-Every ordinary letter remains available for filtering, including `q`, `f`, `h`, `j`, `k`, and `l`. For example, `tl` matches `tools` and `mnrs` can match `main.rs`. Filtering is local, not recursive. To find `.git`, press `.` to show hidden entries and type `git`. A pasted dot-prefixed filter also reveals matching hidden entries.
+Every ordinary letter remains available for filtering, including `q`, `f`, `h`, `j`, `k`, and `l`. For example, `tl` matches `tools` and `mnrs` can match `main.rs`. Ordinary filtering stays local. **Ctrl-R** explicitly switches to descendant-folder search. To find `.git`, press `.` to show hidden entries and type `git`. A pasted dot-prefixed filter also reveals matching hidden entries.
 
 ## Small interface, deliberate behavior
 
-The compact, mint-accented UI uses the terminal's alternate screen. At 90 columns or wider, the right-hand pane shows the selected directory's contents, or a selected file's name/category. Below that width it disappears. `--no-preview` disables it entirely. Vertical spacing contracts in short windows. No Nerd Font is required.
+The compact, mint-accented UI uses the terminal's alternate screen. At 90 columns or wider, the right-hand pane shows the selected directory's contents, or a selected file's name/category. Below that width it disappears. `--no-preview` disables it entirely. Vertical spacing contracts in short windows. No Nerd Font is required. Deep search uses the full list width to display relative paths without launching preview reads.
 
 Status counts distinguish visible folders, files, and special entries. Keyboard hints adapt to the selected entry: a file does not advertise a directory-opening action.
 
@@ -176,7 +195,7 @@ Regenerate the real UI documentation image with:
 cargo run --locked --example render_demo > docs/assets/demo.svg
 ```
 
-CI builds/tests on Linux, macOS, and Windows and checks Rust 1.88 compatibility. Unix PTY tests exercise real key events, file visibility, preview contents, file-navigation guards, cancellation, and terminal restoration. Shell tests cover quoting, Unicode, trailing newlines, and error handling. Windows tests cover PowerShell alias resolution, initialization, and informational commands; full interactive Windows console behavior still needs separate validation.
+CI builds/tests on Linux, macOS, and Windows and checks Rust 1.88 compatibility. Unix PTY tests exercise real key events, file visibility, resolved start paths, explicit deep search, file-navigation guards, cancellation, and terminal restoration. Shell tests cover quoting, Unicode, trailing newlines, and error handling. Windows tests cover PowerShell alias resolution, initialization, and informational commands; full interactive Windows console behavior still needs separate validation.
 
 See [architecture](docs/ARCHITECTURE.md) and [contributing](CONTRIBUTING.md). This is an initial implementation, not a declared stable release.
 

@@ -223,7 +223,10 @@ pub fn draw(frame: &mut Frame<'_>, model: &mut Model, theme: Theme, preview_enab
     };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(if model.deep.is_some() { "// " } else { "/ " }, theme.accent),
+            Span::styled(
+                if model.deep.is_some() { "// " } else { "/ " },
+                theme.accent,
+            ),
             filter,
         ])),
         search,

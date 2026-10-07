@@ -481,10 +481,10 @@ mod tests {
         assert!(parse(["--wat"].map(OsString::from)).is_err());
         assert!(parse(["a", "b"].map(OsString::from)).is_err());
         assert!(parse(["init", "nonsense"].map(OsString::from)).is_err());
-        let Command::Run(options) = parse(
-            ["--hidden", "--dirs-only", "--", "-folder"].map(OsString::from),
-        )
-        .unwrap_or_else(|_| panic!("parse failed")) else {
+        let Command::Run(options) =
+            parse(["--hidden", "--dirs-only", "--", "-folder"].map(OsString::from))
+                .unwrap_or_else(|_| panic!("parse failed"))
+        else {
             panic!("not run")
         };
         assert!(options.hidden);
