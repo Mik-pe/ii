@@ -1,0 +1,38 @@
+# One-time preparation confined to the feature branch; not retained on main.
+name: Prepare Tab navigation
+on:
+  push:
+    branches: [fix/tab-navigates-in-ui]
+    paths: [.github/workflows/prepare-tab.yml]
+permissions:
+  contents: write
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Apply exact scoped edits
+        run: python3 .github/prepare-tab.py
+      - name: Format and regenerate the actual UI snapshot
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          cargo fmt --all
+          cargo run --locked --example render_demo > "$RUNNER_TEMP/ii-demo.svg"
+          cp "$RUNNER_TEMP/ii-demo.svg" docs/assets/demo.svg
+      - name: Rust checks and real terminal tests
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked --all-targets
+          cargo build --locked --release
+          python3 scripts/test_pty.py target/release/ii
+      - name: Commit verified source changes without retaining the preparation workflow
+        run: |
+          rm .github/prepare-tab.py .github/workflows/prepare-tab.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/main.rs src/model.rs src/ui.rs scripts/test_pty.py README.md docs/ARCHITECTURE.md docs/assets/demo.svg CONTRIBUTING.md AGENTS.md .github/prepare-tab.py .github/workflows/prepare-tab.yml
+          git diff --cached --stat
+          git diff --cached --check
+          git commit -m 'fix: keep Tab in the navigator and reserve cd for Enter'
+          git push origin HEAD:fix/tab-navigates-in-ui
