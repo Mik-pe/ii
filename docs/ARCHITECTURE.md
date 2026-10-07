@@ -1,71 +1,77 @@
 # Architecture
 
-`ii` is a directory picker with shell integration, not a general-purpose file manager. The binary is native Rust. There is no service, network request, index, plugin loader, database, or async runtime.
+`ii` is a directory picker with shell integration and contextual file visibility, not a general-purpose file manager. The binary is native Rust. There is no service, network request, index, plugin loader, database, or async runtime.
 
 ## Boundaries
 
 | Component | Owns | Must not own |
 | --- | --- | --- |
 | `filter` | Pure subsequence scoring; safe display labels | Filesystem calls or shell commands |
-| `filesystem` | Single-level scans; worker lifecycle; original paths | Selection policy or terminal rendering |
-| `model` | Current location, selection, filter, bounded cache, rollback | Terminal I/O or synchronous scans |
-| `ui` | Adaptive layout and visible-row rendering | Filesystem reads or shell integration |
-| `main` | Arguments, input dispatch, terminal lifetime, worker results, output protocol | File modification operations |
-| `shell/` | Transfer the selected path into the calling shell's working directory | Evaluating selected paths as code |
+| `filesystem` | Single-level scans; entry kinds; name-based file categories; workers | Selection policy or rendering |
+| `model` | Location, selection, filtering, visibility, counts, cache, rollback | Terminal I/O or synchronous scans |
+| `ui` | Adaptive layout, semantic colors, visible rows, contextual details | Filesystem reads or file launching |
+| `main` | Arguments, input, terminal lifetime, workers, output protocol | File modification operations |
+| `shell/` | Transfer the selected directory to the calling shell | Evaluating selected paths as code |
 
-The library boundary makes navigation and rendering testable without opening a terminal. The binary is the integration layer, not a second implementation of the model.
+The library boundary makes navigation and rendering testable without a terminal. The binary is the integration layer, not a second model implementation.
 
 ## Navigation contract
 
-The header path is the current location. The selected row is only a possible next location. Right enters that row; Enter finishes at the header path. Tab explicitly combines opening the selected row with finishing. Left goes to the parent and selects the row representing the directory just exited.
+The header path is the current location. Right enters a selected directory; Enter finishes at the header path. Tab combines opening a selected directory with finishing. Left goes to the parent and selects the directory just exited.
 
-Navigation stores the most recent selection for up to 128 directories in the current session. It does not write history to disk. On first visit, sorted order determines the selection; there is no inferred "likely" folder that can unpredictably reorder the UI.
+Files are visible and selectable by default, but are context, not actions. `EntryKind` distinguishes directories, regular files with name-based categories, unresolved links, and special entries. Both Right and delayed Tab call `Model::directory_target`, which returns only a directory path and otherwise supplies an explanatory message. Preview scheduling calls `selected_directory`, so a selected file cannot trigger `read_dir(file)`. The detail pane only uses already-known labels/kinds. No file contents are read and no file is executed.
 
-A directory transition is provisional until its worker scan succeeds. Cached contents can be shown immediately, but a failed transition restores the most recent successful location. An Enter received during a scan is kept as an explicit pending finish request. A subsequent key cancels that pending intention rather than unexpectedly exiting later.
+Directories sort before all other entries, including during fuzzy filtering; scores rank matches within each group. Ctrl-F toggles `dirs_only`, also available as a starting CLI flag. It uses the existing listing without new I/O, retains the query and a still-visible selection, and otherwise selects the first visible match. Hidden entries are controlled independently. The preview pane follows the visibility settings but does not inherit the current directory's name filter.
 
-A directory can change between scanning and the shell's `cd`; the shell remains the final authority and propagates a failed `cd`. No cached listing is a filesystem guarantee.
+Visible folder/file/other counts are cached during model rebuilding. Arrow-key movement and rendering do not traverse the full listing to count entries. The listing cache counts all entries, including files.
+
+Navigation stores selection for up to 128 directories in the session. It never writes history. Sorted order determines first-visit selection; there is no inferred likely directory that unpredictably reorders the UI.
+
+Transitions are provisional until their scan succeeds. Cached contents can appear immediately; a failed transition restores the last successful location. Enter/Tab received during a scan is kept as a pending finish. A later key cancels that pending intention instead of unexpectedly exiting later. Directories can change between scanning and the shell's `cd`; the shell remains the final authority.
 
 ## I/O and backpressure
 
-There are two long-lived workers: one for navigation and one for previews. Each has one pending request, one completed-result slot, and a generation counter. A new request replaces obsolete queued work. The UI accepts a result only when its generation and path match the active request.
+Two long-lived workers serve navigation and previews independently. Each has one pending request, one result slot, and a generation counter. New requests replace obsolete pending work. The UI accepts results only when generation and path match the current request.
 
-Workers scan one directory, check cancellation while traversing entries, and sort the resulting subdirectories. Ordinary files need no target metadata. Directory symlinks retain their original alias paths and are never recursively expanded.
+Workers scan one directory, check cancellation while visiting entries, and sort directories first. File categories use names/extensions only, not executable bits or contents. Ordinary entries need no extra metadata call beyond the platform's `DirEntry::file_type` behavior. Symlinks need a target-type check; original alias paths are retained, and no tree is recursively expanded. An unavailable target stays visible as an unresolved link, not silently discarded or falsely described as certainly missing. Sockets, FIFOs, and devices are listed without opening them.
 
-Preview reads begin after a 45 ms debounce and only on terminals wide enough to display the pane. This avoids reading a stream of directories as the user holds an arrow key. Preview work cannot occupy the navigation worker.
+Preview reads begin after a 45 ms debounce, only when the terminal is wide enough to show the pane. A separate worker prevents preview I/O from occupying the navigation worker.
 
-The cache keeps at most 32 listings and 100,000 entries in total; a listing larger than that is displayed but not cached. The active listing and preview can exist outside the cache, so this is not a hard process-memory cap. Large directories still incur one full scan and sort, and filter ranking is proportional to that listing.
+The cache holds at most 32 listings and 100,000 entries total. Larger listings can be displayed but are not cached. Active listings and previews can exist outside the cache: this is not a hard process-memory limit. Showing files requires constructing/sorting more entries; directories-only visibility does not change the scanner's all-entry cache representation. Filtering remains proportional to the active listing.
 
-A blocked filesystem system call cannot be forcibly cancelled by this safe Rust implementation. Worker threads are not joined during shutdown, allowing process exit to remain responsive. The OS reclaims their resources. A slow navigation call can delay later navigation requests until it returns, but input handling and cancellation remain on the UI thread.
+A blocked filesystem system call cannot be forcibly cancelled by this safe Rust implementation. Workers are not joined during shutdown, keeping exit responsive; the OS reclaims their resources. A slow navigation call can delay later requests until it returns, while input and cancellation remain on the UI thread.
 
 ## Rendering and input
 
-Ratatui renders into the alternate screen through Crossterm on stderr. Only visible list rows are constructed. The renderer draws on state changes, not on an idle animation timer. Input polling waits up to 250 ms while idle and 8 ms while waiting for workers; key availability wakes the poll immediately.
+Ratatui renders the alternate screen through Crossterm on stderr. Only visible rows are constructed. Rows without a query use a handful of spans rather than one allocation per character. The renderer redraws on state changes, not an idle animation timer. Polling waits up to 250 ms idle and 8 ms while waiting for workers; key availability wakes it immediately.
 
-The custom palette is optional. `NO_COLOR` and `--no-color` use default terminal colors with reverse-video selection. A preview appears at 90 columns; small terminals use one pane. No patched font is required.
+Colors distinguish directories, code, configuration, documents, media, archives, and unresolved links. Color is not the only cue: directories have `/`, links have `↗`, unavailable links have `↗!`, and sufficiently wide rows have textual category labels. File details repeat the category. No patched font is needed. NO_COLOR / --no-color use default terminal colors and reverse-video selection. The preview/detail pane appears at 90 columns. Long names retain prefix and suffix within a grapheme-aware cell budget.
 
-Backspace removes a Unicode grapheme cluster. Query length is bounded at 256 Unicode scalar values to limit pasted input. The current matcher performs lowercase Unicode subsequence matching, not locale-aware collation or normalization. All ordinary letters remain searchable; `q` is not a quit command.
+Backspace removes one grapheme cluster. Queries are capped at 256 Unicode scalar values. Matching is lowercase Unicode subsequence matching, not normalization or locale collation. All ordinary letters remain searchable, including f and q. Help is modal; Ctrl-C/Ctrl-D still cancel.
 
 ## Terminal lifetime
 
-An RAII session owns raw mode, alternate screen, bracketed paste, and cursor visibility. Drop restores them. The panic hook restores the terminal before reporting the panic. Unix signal flags request orderly cancellation for SIGTERM, SIGINT, SIGHUP, and SIGQUIT. SIGKILL and sudden terminal/process destruction cannot be cleaned up.
+An RAII session owns raw mode, alternate screen, bracketed paste, and cursor visibility. Drop restores them. The panic hook restores before reporting. Unix signal flags request cancellation on SIGTERM, SIGINT, SIGHUP, and SIGQUIT. SIGKILL or sudden terminal destruction cannot be cleaned up.
 
-The program requires interactive stdin and stderr but permits redirected stdout. A noninteractive invocation fails before entering raw mode. CLI help, version, and init commands do not require a terminal.
+Interactive stdin/stderr are required; stdout can be redirected. Noninteractive navigation fails before entering raw mode. Help, version, and init need no terminal.
 
 ## Path and output invariants
 
-1. Original paths remain `PathBuf` throughout navigation. Lossy or escaped labels are never used for filesystem operations.
-2. Control and directional-formatting characters are escaped before rendering. Bracketed paste is filter text, never a command.
-3. Success writes exactly one absolute path to stdout, without an appended newline. `--print0` appends NUL. Unix output preserves original path bytes.
-4. Cancellation emits no path and exits 130. Runtime errors exit 1; invalid arguments exit 2.
-5. Bash/Zsh preserve trailing newlines with a sentinel; Fish uses NUL-delimited fields. Quoted `builtin cd` and PowerShell's `-LiteralPath` avoid interpretation.
-6. The application never modifies browsed files or directories.
+1. Original paths remain PathBuf values. Escaped or lossy labels never drive filesystem operations.
+2. Control and directional-formatting characters in all entry labels are escaped. Paste is filter text, not a command.
+3. Success writes one absolute directory path with no appended newline; --print0 appends NUL. Unix output preserves original bytes.
+4. Cancellation emits no path and exits 130; runtime errors use 1, argument errors 2.
+5. Bash/Zsh preserve trailing newlines using a sentinel; Fish uses NUL-delimited fields. Quoted builtin cd and PowerShell LiteralPath avoid interpretation.
+6. The application never opens file contents, runs file-associated programs, or modifies browsed files/directories. A socket/device is never treated as a regular preview file.
 
-## Verification
+## Verification and documentation
 
-Rust unit tests cover the matcher, Unicode safety, directory scans, worker generations, selection restoration, rollback, cache bounds, and rendering across terminal sizes. CLI integration tests execute the binary noninteractively. `scripts/test_pty.py` uses real Unix pseudo-terminals and verifies terminal flags after exit. `scripts/test_shells.py` executes the actual shell functions against a controlled output protocol.
+Unit tests cover entry classification, directory-first sorting/filtering, navigation guards, visibility toggles, counts, Unicode safety, symlinks/sockets, worker generations, selection restoration, rollback, cache bounds, colors/no-color, and terminal sizes. CLI tests invoke the binary noninteractively. Real Unix PTY tests verify key events, file visibility/guards, previews, output, cancellation, and terminal restoration. Separate shell tests cover quoting and initialization.
 
-Benchmarks deliberately separate single-directory scanning from subsequence scoring. Neither result is an end-to-end startup or keystroke benchmark. Any performance claim should state the build profile, hardware/filesystem, workload, and measurement method.
+`examples/render_demo.rs` renders the real UI through TestBackend into an SVG using deterministic generic data. It is development-only and performs no screenshot/data collection in the application. Keep docs/assets/demo.svg synchronized when changing presentation; the terminal's actual font can differ from the SVG.
 
-## Scope of the initial version
+Benchmarks separate scanning and subsequence scoring. Neither measures end-to-end startup or keypress latency; performance claims must state their build, machine, filesystem/workload, and method.
 
-Persistent frecency, recursive search, inline terminal mode, mouse interaction, configuration files, and file operations are not implemented. Windows builds and CLI tests do not substitute for interactive Windows Terminal / PowerShell validation. Broader terminal testing and distribution packaging should be validated before a stable release; changes must preserve the navigation and output contracts above.
+## Deliberately outside scope
+
+Persistent frecency, recursive search, inline terminal mode, mouse interaction, file-content previews, configuration files, and file operations are not implemented. Windows builds and PowerShell init tests do not replace interactive Windows Terminal validation. Preserve the navigation/output contracts above when extending the program.

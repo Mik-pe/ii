@@ -24,7 +24,7 @@ fn color(color: Color, fallback: &str) -> String {
     }
 }
 
-fn main() -> io::Result<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let root = PathBuf::from("/home/dev/code/app");
     let mut model = Model::new(root.clone(), false);
     let mut entries: Vec<_> = ["assets", "docs", "src"]
@@ -95,5 +95,6 @@ fn main() -> io::Result<()> {
         }
     }
     writeln!(out, "</g></svg>")?;
-    out.flush()
+    out.flush()?;
+    Ok(())
 }

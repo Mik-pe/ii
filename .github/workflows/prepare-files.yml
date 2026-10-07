@@ -20,6 +20,7 @@ jobs:
           cargo clippy --fix --locked --allow-dirty --allow-staged --all-targets
           cargo fmt --all
       - name: Render actual UI fixture
+        if: always()
         run: |
           cargo run --locked --example render_demo > /tmp/ii-demo.svg
           cp /tmp/ii-demo.svg docs/assets/demo.svg
@@ -53,6 +54,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: files-review
+          overwrite: true
           path: |
             docs/assets/demo.svg
             src/
