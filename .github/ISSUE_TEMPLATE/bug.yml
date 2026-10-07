@@ -1,0 +1,24 @@
+name: Bug report
+description: Report a navigation, terminal, or shell integration problem.
+title: "bug: "
+body:
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include ii version, OS, shell version, terminal emulator, and whether shell integration is installed.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: A small directory tree and exact keys/commands. Replace private path names with generic examples.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true

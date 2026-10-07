@@ -19,34 +19,41 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
       - name: Toolchain
         run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
       - name: Format
         run: cargo fmt --all -- --check
       - name: Tests
-        if: always()
-        run: cargo test --all-targets
+        run: cargo test --locked --all-targets
       - name: Clippy
-        if: always()
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
       - name: Build
-        if: always()
-        run: cargo build --release
+        run: cargo build --locked --release
       - name: Real terminal integration
-        if: runner.os != 'Windows' && success()
+        if: runner.os != 'Windows'
         run: python3 scripts/test_pty.py target/release/ii
       - name: Install shells
-        if: runner.os == 'Linux' && success()
+        if: runner.os == 'Linux'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq zsh fish
       - name: Shell integration
-        if: runner.os == 'Linux' && success()
+        if: runner.os == 'Linux'
         run: python3 scripts/test_shells.py
-      - name: Binary artifact
-        if: success()
+      - name: Package release build
+        run: python scripts/package.py
+      - name: Build artifacts with checksums
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: ii-${{ runner.os }}-${{ runner.arch }}
-          path: |
-            target/release/ii
-            target/release/ii.exe
+          path: dist/*
           if-no-files-found: error
+  msrv:
+    name: Minimum Rust 1.88
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install 1.88 --profile minimal
+      - run: cargo +1.88 check --locked --all-targets
