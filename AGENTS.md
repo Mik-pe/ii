@@ -5,7 +5,7 @@ Read README.md and docs/ARCHITECTURE.md before changing behavior. This is a smal
 - Implement working code and regression tests, not placeholder features or speculative subsystems.
 - Keep the model free of terminal/filesystem I/O. Keep scanning off the input thread.
 - Preserve original PathBuf values, stdout's exact directory-path protocol, and quoted/literal shell cd behavior.
-- Enter finishes at the header path; Right and Tab accept directories only. Files are visible/selectable but are never opened, executed, or returned as cd targets.
+- Enter is the only way to finish at the header path and cd in the shell. Right and Tab share directory-only navigation inside the UI; neither exits or queues completion. Files are visible/selectable but are never opened, executed, or returned as cd targets.
 - Preserve directory-first order during filtering, Ctrl-F visibility toggles, selected directories, and cached counts without per-arrow full-list scans.
 - Do not intercept ordinary letters such as f/q/j/k: users type them to filter.
 - Keep name-based file categories distinct from claims about contents, permissions, or executability. Do not read files for classification or preview.

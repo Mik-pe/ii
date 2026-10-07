@@ -313,13 +313,13 @@ pub fn draw(frame: &mut Frame<'_>, model: &mut Model, theme: Theme, preview_enab
     frame.render_widget(Paragraph::new(text), status);
     let file_selected = model.selected_entry().is_some_and(|entry| !entry.is_dir());
     let hints = if keys.width >= 85 && !file_selected {
-        "↑↓ select  → open  ← up  Enter cd here  Tab cd selected  Ctrl-F files  ? help"
+        "↑↓ select  →/Tab open  ← up  Enter cd here  Ctrl-F files  ? help"
     } else if file_selected && keys.width >= 52 {
         "↑↓ select  ← up  Enter cd here  Ctrl-F files  ? help"
     } else if file_selected {
         "↑↓ select  ← up  Enter cd  ? help"
     } else {
-        "↑↓ select  → in  ← up  Enter cd  ? help"
+        "↑↓ select  →/Tab in  ← up  Enter cd  ? help"
     };
     frame.render_widget(Paragraph::new(hints).style(theme.muted), keys);
     if model.help {
@@ -431,7 +431,7 @@ fn draw_help(frame: &mut Frame<'_>, area: Rect, theme: Theme) {
         "→              Open selected folder (never a file)",
         "←              Parent (keep the folder selected)",
         "Enter          Finish in the directory in the header",
-        "Tab            Open selected folder and finish",
+        "Tab            Open selected folder (stay in UI)",
         "Type           Fuzzy-filter folders and files",
         "Backspace      Erase a character; parent if filter is empty",
         "Esc            Clear filter; otherwise cancel without cd",

@@ -136,7 +136,7 @@ impl Model {
             .map(|entry| entry.path.clone())
     }
 
-    /// Right and Tab share this guard, including Tab remembered during loading.
+    /// Right and Tab share this directory-only navigation guard; neither finishes.
     pub fn directory_target(&mut self) -> Option<PathBuf> {
         if let Some(path) = self.selected_directory() {
             return Some(path);

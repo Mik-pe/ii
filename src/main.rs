@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-const HELP: &str = "ii — two taps, any directory\n\nUSAGE\n    ii [OPTIONS] [PATH]\n    ii init <bash|zsh|fish|powershell>\n\nOPTIONS\n    -a, --hidden       Show hidden entries\n        --dirs-only    Start with files hidden (Ctrl-F toggles)\n        --no-preview   Use a single directory pane\n        --no-color     Use your terminal colors (also honors NO_COLOR)\n        --print0       Terminate the selected path with NUL (for scripts)\n    -h, --help         Print this help\n    -V, --version      Print the version\n        --             Treat the remaining argument as a path\n\nKEYS\n    ↑↓ select   → open folder   ← parent   Enter cd here   Tab cd selected folder\n    Type to filter folders and files. Ctrl-F shows/hides files.\n    Files have name-based colors and type labels; they are never opened or executed.\n    Esc clears the filter, then cancels. Ctrl-C always cancels.\n    . toggles hidden entries. Ctrl-L refreshes. ? opens help.\n\nSHELL SETUP (once in your shell profile)\n    bash:       eval \"$(ii init bash)\"\n    zsh:        eval \"$(ii init zsh)\"\n    fish:       ii init fish | source\n    PowerShell: ii.exe init powershell | Out-String | Invoke-Expression\n\nPowerShell setup replaces the built-in ii alias for Invoke-Item.\nThe UI uses stderr. A successful selection writes only the raw absolute path\n(with no trailing newline) to stdout. Cancellation exits 130 with no path.\nA subprocess cannot change its parent directory: install the shell function.\n";
+const HELP: &str = "ii — two taps, any directory\n\nUSAGE\n    ii [OPTIONS] [PATH]\n    ii init <bash|zsh|fish|powershell>\n\nOPTIONS\n    -a, --hidden       Show hidden entries\n        --dirs-only    Start with files hidden (Ctrl-F toggles)\n        --no-preview   Use a single directory pane\n        --no-color     Use your terminal colors (also honors NO_COLOR)\n        --print0       Terminate the selected path with NUL (for scripts)\n    -h, --help         Print this help\n    -V, --version      Print the version\n        --             Treat the remaining argument as a path\n\nKEYS\n    ↑↓ select   → open folder   ← parent   Enter cd here   Tab open folder\n    Type to filter folders and files. Ctrl-F shows/hides files.\n    Files have name-based colors and type labels; they are never opened or executed.\n    Esc clears the filter, then cancels. Ctrl-C always cancels.\n    . toggles hidden entries. Ctrl-L refreshes. ? opens help.\n\nSHELL SETUP (once in your shell profile)\n    bash:       eval \"$(ii init bash)\"\n    zsh:        eval \"$(ii init zsh)\"\n    fish:       ii init fish | source\n    PowerShell: ii.exe init powershell | Out-String | Invoke-Expression\n\nPowerShell setup replaces the built-in ii alias for Invoke-Item.\nThe UI uses stderr. A successful selection writes only the raw absolute path\n(with no trailing newline) to stdout. Cancellation exits 130 with no path.\nA subprocess cannot change its parent directory: install the shell function.\n";
 
 #[derive(Default)]
 struct Options {
@@ -146,15 +146,10 @@ impl Drop for Session {
     }
 }
 
-#[derive(Clone, Copy)]
-enum Finish {
-    Current,
-    Selected,
-}
 enum Intent {
     None,
     Navigate(PathBuf, Option<PathBuf>),
-    Finish(Finish),
+    Finish,
     Cancel,
 }
 
@@ -211,15 +206,14 @@ fn key_intent(model: &mut Model, key: KeyEvent, page: isize, home: Option<&Path>
         KeyCode::Home => model.move_selection(isize::MIN),
         KeyCode::End => model.move_selection(isize::MAX),
         KeyCode::Left => return parent(model),
-        KeyCode::Right => {
+        KeyCode::Right | KeyCode::Tab => {
             return model
                 .directory_target()
                 .map_or(Intent::None, |path| Intent::Navigate(path, None));
         }
         KeyCode::Backspace if model.query.is_empty() => return parent(model),
         KeyCode::Backspace => model.pop_query(),
-        KeyCode::Enter => return Intent::Finish(Finish::Current),
-        KeyCode::Tab => return Intent::Finish(Finish::Selected),
+        KeyCode::Enter => return Intent::Finish,
         KeyCode::Esc if model.query.is_empty() => return Intent::Cancel,
         KeyCode::Esc => model.clear_query(),
         KeyCode::F(1) => model.help = true,
@@ -276,7 +270,7 @@ fn run(options: &Options) -> io::Result<Option<PathBuf>> {
     let mut navigation_id = navigation.request(model.cwd.clone());
     let mut preview_id = None;
     let mut preview_deadline: Option<Instant> = None;
-    let mut finish = None;
+    let mut finish = false;
     let mut dirty = true;
     let mut size = terminal.size()?;
     let theme = Theme::new(
@@ -294,28 +288,16 @@ fn run(options: &Options) -> io::Result<Option<PathBuf>> {
             match result.result {
                 Ok(listing) => model.complete_navigation(listing),
                 Err(error) => {
-                    finish = None;
+                    finish = false;
                     model.fail_navigation(format!("{}: {}", result.path.display(), error));
                 }
             }
             dirty = true;
         }
-        // Remember Enter/Tab during a scan, but never allow a file as a cd target.
-        if !model.loading
-            && let Some(request) = finish.take()
-        {
-            match request {
-                Finish::Current if model.listing.is_some() => return Ok(Some(model.cwd)),
-                Finish::Selected => {
-                    if let Some(path) = model.directory_target() {
-                        model.begin_navigation(path.clone(), None);
-                        navigation_id = navigation.request(path);
-                        finish = Some(Finish::Current);
-                    }
-                    dirty = true;
-                }
-                _ => {}
-            }
+        // Only Enter can request completion. Tab and Right only navigate.
+        // Keep Enter during a scan; a later key or scan failure cancels it.
+        if !model.loading && std::mem::take(&mut finish) && model.listing.is_some() {
+            return Ok(Some(model.cwd));
         }
         let preview_enabled = !options.no_preview && size.width >= 90;
         let desired = if preview_enabled && !model.loading {
@@ -373,7 +355,7 @@ fn run(options: &Options) -> io::Result<Option<PathBuf>> {
         }
         let intent = match event::read()? {
             Event::Key(key) if key.kind != KeyEventKind::Release => {
-                finish = None;
+                finish = false;
                 dirty = true;
                 key_intent(
                     &mut model,
@@ -383,7 +365,7 @@ fn run(options: &Options) -> io::Result<Option<PathBuf>> {
                 )
             }
             Event::Paste(text) if !model.help => {
-                finish = None;
+                finish = false;
                 model.push_query(&text);
                 dirty = true;
                 Intent::None
@@ -398,7 +380,7 @@ fn run(options: &Options) -> io::Result<Option<PathBuf>> {
         match intent {
             Intent::None => {}
             Intent::Cancel => return Ok(None),
-            Intent::Finish(request) => finish = Some(request),
+            Intent::Finish => finish = true,
             Intent::Navigate(path, preferred) => {
                 model.begin_navigation(path.clone(), preferred);
                 navigation_id = navigation.request(path);
@@ -520,7 +502,7 @@ mod tests {
         assert!(model.message.as_deref().unwrap().contains("File selected"));
         assert!(matches!(
             key_intent(&mut model, key(KeyCode::Enter), 10, None),
-            Intent::Finish(Finish::Current)
+            Intent::Finish
         ));
     }
 
@@ -549,5 +531,140 @@ mod tests {
             None,
         );
         assert!(model.dirs_only);
+    }
+
+    #[test]
+    fn tab_and_right_navigate_without_finishing_even_with_cached_loading_rows() {
+        for loading in [false, true] {
+            for code in [KeyCode::Tab, KeyCode::Right] {
+                let root = PathBuf::from("/code");
+                let target = root.join("app");
+                let mut model = Model::new(root, false);
+                model.complete_navigation(Arc::new(Listing {
+                    entries: vec![Entry::new(target.clone(), false)],
+                    skipped: 0,
+                }));
+                model.loading = loading;
+                let intent = key_intent(
+                    &mut model,
+                    KeyEvent::new(code, KeyModifiers::NONE),
+                    10,
+                    None,
+                );
+                assert!(matches!(intent, Intent::Navigate(path, None) if path == target));
+            }
+        }
+    }
+
+    #[test]
+    fn tab_and_right_never_queue_completion_without_a_visible_selection() {
+        for code in [KeyCode::Tab, KeyCode::Right] {
+            let mut model = Model::new(PathBuf::from("/code"), false);
+            assert!(model.loading);
+            assert!(matches!(
+                key_intent(
+                    &mut model,
+                    KeyEvent::new(code, KeyModifiers::NONE),
+                    10,
+                    None
+                ),
+                Intent::None
+            ));
+            // Empty loaded directories have exactly the same no-op behavior.
+            model.complete_navigation(Arc::new(Listing::default()));
+            assert!(matches!(
+                key_intent(
+                    &mut model,
+                    KeyEvent::new(code, KeyModifiers::NONE),
+                    10,
+                    None
+                ),
+                Intent::None
+            ));
+        }
+    }
+
+    #[test]
+    fn tab_and_right_keep_file_and_special_entry_guards() {
+        use ii::filesystem::{EntryKind, FileKind};
+        for kind in [
+            EntryKind::File(FileKind::Code),
+            EntryKind::UnresolvedLink,
+            EntryKind::Special,
+        ] {
+            for code in [KeyCode::Tab, KeyCode::Right] {
+                let root = PathBuf::from("/code");
+                let mut model = Model::new(root.clone(), false);
+                model.complete_navigation(Arc::new(Listing {
+                    entries: vec![Entry::with_kind(root.join("entry"), false, kind)],
+                    skipped: 0,
+                }));
+                assert!(matches!(
+                    key_intent(
+                        &mut model,
+                        KeyEvent::new(code, KeyModifiers::NONE),
+                        10,
+                        None
+                    ),
+                    Intent::None
+                ));
+                assert!(model.message.is_some());
+                assert_eq!(model.cwd, root);
+            }
+        }
+    }
+
+    #[test]
+    fn only_enter_requests_completion_and_help_blocks_it() {
+        for code in [
+            KeyCode::Enter,
+            KeyCode::Tab,
+            KeyCode::Right,
+            KeyCode::Left,
+            KeyCode::Up,
+            KeyCode::Down,
+            KeyCode::Home,
+            KeyCode::End,
+            KeyCode::PageUp,
+            KeyCode::PageDown,
+            KeyCode::Backspace,
+            KeyCode::Esc,
+            KeyCode::Char('q'),
+            KeyCode::F(1),
+        ] {
+            let root = PathBuf::from("/code");
+            let mut model = Model::new(root.clone(), false);
+            model.complete_navigation(Arc::new(Listing {
+                entries: vec![Entry::new(root.join("app"), false)],
+                skipped: 0,
+            }));
+            let intent = key_intent(
+                &mut model,
+                KeyEvent::new(code, KeyModifiers::NONE),
+                10,
+                None,
+            );
+            assert_eq!(matches!(intent, Intent::Finish), code == KeyCode::Enter);
+            model.help = true;
+            assert!(matches!(
+                key_intent(
+                    &mut model,
+                    KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                    10,
+                    None
+                ),
+                Intent::None
+            ));
+        }
+        let mut loading = Model::new(PathBuf::from("/code"), false);
+        assert!(matches!(
+            key_intent(
+                &mut loading,
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                10,
+                None
+            ),
+            Intent::Finish
+        ));
     }
 }
