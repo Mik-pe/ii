@@ -48,6 +48,19 @@ impl Theme {
     }
 }
 
+fn vertical_spacing(height: u16) -> u16 {
+    if height < 16 { 1 } else { 2 }
+}
+
+/// Actual directory-row count, shared with PageUp/PageDown input dispatch.
+pub fn page_size(height: u16) -> u16 {
+    height
+        .saturating_sub(2)
+        .min(32)
+        .saturating_sub(vertical_spacing(height) * 3 + 3)
+        .max(1)
+}
+
 /// Keep the useful right-hand end of a path; measure terminal cells, not bytes.
 pub fn tail(input: &str, width: usize) -> String {
     if UnicodeWidthStr::width(input) <= width {
@@ -92,7 +105,7 @@ fn row(entry: &Entry, query: &str, theme: Theme) -> Line<'static> {
 
 pub fn draw(frame: &mut Frame<'_>, model: &mut Model, theme: Theme, preview_enabled: bool) {
     let area = frame.area();
-    if area.width < 20 || area.height < 7 {
+    if area.width < 20 || area.height < 9 {
         frame.render_widget(Paragraph::new("ii · enlarge terminal\nEsc cancels"), area);
         return;
     }
@@ -103,12 +116,13 @@ pub fn draw(frame: &mut Frame<'_>, model: &mut Model, theme: Theme, preview_enab
         width,
         area.height.saturating_sub(2).min(32),
     );
+    let spacing = vertical_spacing(area.height);
     let [header, search, content, status, keys] = Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Length(2),
-        Constraint::Min(1),
+        Constraint::Length(spacing),
+        Constraint::Length(spacing),
+        Constraint::Min(3),
         Constraint::Length(1),
-        Constraint::Length(2),
+        Constraint::Length(spacing),
     ])
     .areas(body);
 
@@ -359,10 +373,46 @@ mod tests {
             terminal
                 .draw(|frame| draw(frame, &mut model, Theme::new(false), true))
                 .unwrap();
+            if width >= 20 && height >= 9 {
+                let text: String = terminal
+                    .backend()
+                    .buffer()
+                    .content
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .collect();
+                assert!(text.contains("app/"), "folders hidden at {width}x{height}");
+            }
             model.help = true;
             terminal
                 .draw(|frame| draw(frame, &mut model, Theme::new(true), true))
                 .unwrap();
+        }
+    }
+
+    #[test]
+    fn page_size_matches_rendered_rows_at_every_supported_height() {
+        for height in 9..50 {
+            let mut terminal = Terminal::new(TestBackend::new(60, height)).unwrap();
+            let root = PathBuf::from("/code");
+            let mut model = Model::new(root.clone(), false);
+            model.complete_navigation(Arc::new(Listing {
+                entries: (0..100)
+                    .map(|index| Entry::new(root.join(format!("folder-{index:03}")), false))
+                    .collect(),
+                skipped: 0,
+            }));
+            terminal
+                .draw(|frame| draw(frame, &mut model, Theme::new(true), false))
+                .unwrap();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            assert_eq!(text.matches("folder-").count(), page_size(height) as usize);
         }
     }
 

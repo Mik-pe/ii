@@ -271,7 +271,21 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn preserves_non_utf8_paths() {
+    fn preserves_non_utf8_paths_independently_of_display_labels() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+        let path = PathBuf::from(OsString::from_vec(vec![b'a', 0xff]));
+        let entry = Entry::new(path.clone(), false);
+        assert_eq!(entry.path, path);
+        assert!(entry.label.contains('\u{fffd}'));
+    }
+
+    // Linux's native test filesystem accepts arbitrary filename bytes. APFS
+    // rejects malformed UTF-8 at creation; the pure invariant is tested above
+    // on every Unix platform without pretending such a file can be created.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn scans_non_utf8_directory_names() {
         use std::ffi::OsString;
         use std::os::unix::ffi::OsStringExt;
         let root = tempfile::tempdir().unwrap();

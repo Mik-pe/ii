@@ -35,7 +35,7 @@ Install from this repository with a current stable Rust toolchain:
 cargo install --git https://github.com/Mik-pe/ii --locked
 ```
 
-Make sure Cargo's binary directory is on your `PATH`. This project is not currently published on crates.io; use the Git installation above rather than `cargo install ii`.
+Make sure Cargo's binary directory is on your `PATH`. This project is not currently published on crates.io; use the Git installation above rather than `cargo install ii`. CI also produces platform-specific build archives with SHA-256 checksums; these are development builds, not a tagged stable release.
 
 ### Connect your shell
 
@@ -101,11 +101,11 @@ The setup command evaluates only the shell integration emitted by the installed 
 
 Selection is remembered within a navigation session. Returning to a parent or revisiting a directory does not throw you back to the first row. Selection is deterministic; there is no hidden prediction model or persistent visit database.
 
-Every ordinary letter is available for filtering, including `q`, `h`, `j`, `k`, and `l`. Filtering matches case-insensitive subsequences: `tl` can find `tools`. It is local to the current directory, not recursive search. A filter starting with `.` also reveals matching hidden directories; type the initial dot after toggling hidden visibility, or paste a dot-prefixed filter.
+Every ordinary letter is available for filtering, including `q`, `h`, `j`, `k`, and `l`. Filtering matches case-insensitive subsequences: `tl` can find `tools`. It is local to the current directory, not recursive search. To find `.git`, press `.` to show hidden directories and then type `git`. A pasted filter starting with `.` also reveals matching hidden directories.
 
 ## Small interface, deliberate behavior
 
-The UI uses a compact, mint-accented layout in the terminal's alternate screen. On wide terminals, a right-hand pane shows the selected directory's subdirectories before you open it. Below 90 columns, that pane disappears. `--no-preview` keeps a single pane at any width. No Nerd Font is required.
+The UI uses a compact, mint-accented layout in the terminal's alternate screen. On wide terminals, a right-hand pane shows the selected directory's subdirectories before you open it. Below 90 columns, that pane disappears. `--no-preview` keeps a single pane at any width. Vertical spacing contracts in short terminal windows. No Nerd Font is required.
 
 The previous terminal screen, cursor, and raw-mode settings are restored on normal exit, cancellation, and panic. Unix termination signals are handled too; an uncatchable `SIGKILL` cannot be cleaned up by any program.
 
@@ -135,7 +135,7 @@ Measure on your own machine:
 cargo bench --locked --bench navigation
 ```
 
-The benchmark reports median and p95 for a single-level scan and a 10,000-name subsequence-matching workload. It does not measure end-to-end keypress latency or claim a comparison with other tools.
+The benchmark reports median and p95 for a single-level scan and a 10,000-name subsequence-matching workload. It does not measure end-to-end keypress latency or claim a comparison with other tools. [Initial measurements and methodology](docs/PERFORMANCE.md) are documented separately.
 
 ## Shell protocol and path safety
 
@@ -143,7 +143,7 @@ The interactive UI is written to **stderr**. On a successful selection the binar
 
 Bash and Zsh use a sentinel to preserve trailing newlines in Unix names. Fish uses NUL-delimited output. Paths are passed to `cd` as one quoted argument. PowerShell uses `Set-Location -LiteralPath`, not wildcard expansion. Its integration targets Windows; unusual Unix newline-containing paths should use Bash, Zsh, or Fish.
 
-On Unix, the selected path's original bytes are preserved even when the name is not UTF-8. Escaped display labels never replace the filesystem path. Control characters and directional formatting controls are escaped before rendering.
+On Unix, the selected path's original bytes are preserved even when the name is not UTF-8 and the underlying filesystem permits such names. Escaped display labels never replace the filesystem path. Control characters and directional formatting controls are escaped before rendering.
 
 The shell function handles cancellation as a successful no-op. To bypass that function and access the raw binary protocol in Bash/Zsh/Fish, use `command ii`.
 
@@ -158,7 +158,7 @@ cargo run --release -- ~/code
 
 CI builds and tests on Linux, macOS, and Windows. Unix pseudo-terminal tests exercise real key events, selected-path output, cancellation, and terminal restoration. Separate shell tests exercise Bash, Zsh, and Fish with quoting, Unicode, trailing newlines, and error handling. The Windows interactive console is not covered by the Unix PTY harness.
 
-See [architecture](docs/ARCHITECTURE.md) for the boundaries and invariants, and [contributing](CONTRIBUTING.md) for the change checklist. This is an initial implementation; distribution packaging and broader real-terminal testing should precede a stable release.
+See [architecture](docs/ARCHITECTURE.md) for the boundaries and invariants, and [contributing](CONTRIBUTING.md) for the change checklist. This is an initial implementation; broader real-terminal testing should precede a stable release.
 
 ## License
 

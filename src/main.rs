@@ -371,7 +371,7 @@ fn run(options: &Options) -> io::Result<Option<PathBuf>> {
                 key_intent(
                     &mut model,
                     key,
-                    size.height.min(32).saturating_sub(9).max(1) as isize,
+                    ui::page_size(size.height) as isize,
                     home.as_deref(),
                 )
             }
