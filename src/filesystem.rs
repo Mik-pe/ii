@@ -156,14 +156,14 @@ impl Scanner {
                     };
                     let Some(request) = request else { continue };
                     let is_obsolete = || worker.generation.load(Ordering::Acquire) != request.id;
-                    if let Some(result) = scan_cancellable(&request.path, is_obsolete) {
-                        if !is_obsolete() {
-                            *lock(&worker.result) = Some(ScanResult {
-                                id: request.id,
-                                path: request.path,
-                                result: result.map(Arc::new),
-                            });
-                        }
+                    if let Some(result) = scan_cancellable(&request.path, is_obsolete)
+                        && !is_obsolete()
+                    {
+                        *lock(&worker.result) = Some(ScanResult {
+                            id: request.id,
+                            path: request.path,
+                            result: result.map(Arc::new),
+                        });
                     }
                 }
             })?;
@@ -237,12 +237,12 @@ mod tests {
         let expected = scanner.request(other.path().to_owned());
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            if let Some(result) = scanner.poll() {
-                if result.id == expected {
-                    assert_eq!(result.path, other.path());
-                    assert!(result.result.is_ok());
-                    break;
-                }
+            if let Some(result) = scanner.poll()
+                && result.id == expected
+            {
+                assert_eq!(result.path, other.path());
+                assert!(result.result.is_ok());
+                break;
             }
             assert!(Instant::now() < deadline, "scan worker timed out");
             thread::sleep(Duration::from_millis(1));

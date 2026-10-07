@@ -279,33 +279,34 @@ fn run(options: &Options) -> io::Result<Option<PathBuf>> {
         if interrupted.load(Ordering::Relaxed) {
             return Ok(None);
         }
-        if let Some(result) = navigation.poll() {
-            if result.id == navigation_id && result.path == model.cwd {
-                match result.result {
-                    Ok(listing) => model.complete_navigation(listing),
-                    Err(error) => {
-                        finish = None;
-                        model.fail_navigation(format!("{}: {}", result.path.display(), error));
-                    }
+        if let Some(result) = navigation.poll()
+            && result.id == navigation_id
+            && result.path == model.cwd
+        {
+            match result.result {
+                Ok(listing) => model.complete_navigation(listing),
+                Err(error) => {
+                    finish = None;
+                    model.fail_navigation(format!("{}: {}", result.path.display(), error));
                 }
-                dirty = true;
             }
+            dirty = true;
         }
         // Remember Enter during a scan instead of making the user press it again.
-        if !model.loading {
-            if let Some(request) = finish.take() {
-                match request {
-                    Finish::Current if model.listing.is_some() => return Ok(Some(model.cwd)),
-                    Finish::Selected => {
-                        if let Some(path) = model.selected_path() {
-                            model.begin_navigation(path.clone(), None);
-                            navigation_id = navigation.request(path);
-                            finish = Some(Finish::Current);
-                            dirty = true;
-                        }
+        if !model.loading
+            && let Some(request) = finish.take()
+        {
+            match request {
+                Finish::Current if model.listing.is_some() => return Ok(Some(model.cwd)),
+                Finish::Selected => {
+                    if let Some(path) = model.selected_path() {
+                        model.begin_navigation(path.clone(), None);
+                        navigation_id = navigation.request(path);
+                        finish = Some(Finish::Current);
+                        dirty = true;
                     }
-                    _ => {}
                 }
+                _ => {}
             }
         }
 
@@ -334,21 +335,22 @@ fn run(options: &Options) -> io::Result<Option<PathBuf>> {
             }
             preview_deadline = None;
         }
-        if let Some(result) = previews.poll() {
-            if Some(result.id) == preview_id && Some(&result.path) == model.preview_path.as_ref() {
-                model.preview_loading = false;
-                match result.result {
-                    Ok(listing) => {
-                        model.cache_listing(result.path, Arc::clone(&listing));
-                        model.preview = Some(listing);
-                    }
-                    Err(error) => {
-                        model.preview = None;
-                        model.preview_error = Some(safe_label(&error.to_string()));
-                    }
+        if let Some(result) = previews.poll()
+            && Some(result.id) == preview_id
+            && Some(&result.path) == model.preview_path.as_ref()
+        {
+            model.preview_loading = false;
+            match result.result {
+                Ok(listing) => {
+                    model.cache_listing(result.path, Arc::clone(&listing));
+                    model.preview = Some(listing);
                 }
-                dirty = true;
+                Err(error) => {
+                    model.preview = None;
+                    model.preview_error = Some(safe_label(&error.to_string()));
+                }
             }
+            dirty = true;
         }
         if dirty {
             terminal.draw(|frame| ui::draw(frame, &mut model, theme, preview_enabled))?;

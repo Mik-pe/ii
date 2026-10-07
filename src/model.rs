@@ -37,10 +37,9 @@ impl Cache {
             .items
             .iter()
             .position(|(candidate, _)| candidate == &path)
+            && let Some((_, old)) = self.items.remove(index)
         {
-            if let Some((_, old)) = self.items.remove(index) {
-                self.entries -= old.entries.len();
-            }
+            self.entries -= old.entries.len();
         }
         if listing.entries.len() > CACHE_ENTRIES {
             return;
@@ -141,14 +140,14 @@ impl Model {
     /// Show cached contents immediately; a worker always revalidates the directory.
     pub fn begin_navigation(&mut self, path: PathBuf, preferred: Option<PathBuf>) {
         self.remember();
-        if !self.loading {
-            if let Some(listing) = &self.listing {
-                self.fallback = Some(Location {
-                    path: self.cwd.clone(),
-                    listing: Arc::clone(listing),
-                    selected: self.selected_path(),
-                });
-            }
+        if !self.loading
+            && let Some(listing) = &self.listing
+        {
+            self.fallback = Some(Location {
+                path: self.cwd.clone(),
+                listing: Arc::clone(listing),
+                selected: self.selected_path(),
+            });
         }
         self.preferred = preferred.or_else(|| {
             self.memory
