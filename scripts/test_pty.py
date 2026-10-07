@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""Real terminal smoke tests: key input, raw mode, exit protocol, and signal cleanup."""
+"""Real terminal tests, with a supervisor that checks cleanup before PTY hangup."""
+import errno
 import fcntl
+import json
 import os
 from pathlib import Path
 import pty
@@ -16,56 +18,105 @@ import unittest
 
 BINARY = Path(sys.argv.pop(1) if len(sys.argv) > 1 else 'target/debug/ii').resolve()
 
+# Keep the controlling session alive until after the native child exits. On
+# macOS, querying the slave after its session leader exits returns ENOTTY.
+# This supervisor observes cleanup; it must never restore the terminal itself.
+SUPERVISOR = r'''
+import fcntl
+import json
+import os
+import signal
+import subprocess
+import sys
+import termios
+
+report_fd = int(sys.argv[1])
+fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+before = repr(termios.tcgetattr(0))
+child = subprocess.Popen(sys.argv[2:])
+
+def forward(number, _frame):
+    try:
+        child.send_signal(number)
+    except ProcessLookupError:
+        pass
+
+signal.signal(signal.SIGTERM, forward)
+code = child.wait()
+after = repr(termios.tcgetattr(0))
+with os.fdopen(report_fd, 'w', encoding='utf-8') as report:
+    json.dump({'before': before, 'after': after, 'status': code}, report)
+sys.exit(code if code >= 0 else 128 - code)
+'''
+
 
 class Session:
     def __init__(self, path, *options):
         self.master, self.slave = pty.openpty()
         fcntl.ioctl(self.slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 100, 0, 0))
-        self.before = termios.tcgetattr(self.slave)
         self.transcript = bytearray()
-
-        def child_setup():
-            os.setsid()
-            fcntl.ioctl(0, termios.TIOCSCTTY, 0)
-
-        self.process = subprocess.Popen([str(BINARY), '--no-preview', *options, str(path)], stdin=self.slave, stderr=self.slave, stdout=subprocess.PIPE,
-                                        env=dict(os.environ, TERM='xterm-256color'), preexec_fn=child_setup)
+        self.report = tempfile.TemporaryFile()
+        try:
+            self.process = subprocess.Popen(
+                [sys.executable, '-c', SUPERVISOR, str(self.report.fileno()),
+                 str(BINARY), '--no-preview', *options, str(path)],
+                stdin=self.slave, stderr=self.slave, stdout=subprocess.PIPE,
+                pass_fds=(self.report.fileno(),), start_new_session=True,
+                env=dict(os.environ, TERM='xterm-256color'))
+        except BaseException:
+            self.report.close()
+            os.close(self.master)
+            os.close(self.slave)
+            raise
 
     def send(self, data):
         mark = len(self.transcript)
         os.write(self.master, data)
         return mark
 
+    def drain(self):
+        ready, _, _ = select.select([self.master], [], [], 0.05)
+        if ready:
+            try:
+                self.transcript.extend(os.read(self.master, 65536))
+            except OSError as error:
+                if error.errno not in (errno.EIO, errno.ENXIO):
+                    raise
+
     def expect(self, needle, after=0):
         deadline = time.monotonic() + 10
         while needle not in self.transcript[after:]:
             if time.monotonic() > deadline:
                 raise AssertionError(f'terminal did not show {needle!r}: {bytes(self.transcript)!r}')
-            ready, _, _ = select.select([self.master], [], [], 0.05)
-            if ready:
-                self.transcript.extend(os.read(self.master, 65536))
-            elif self.process.poll() is not None:
+            self.drain()
+            if needle not in self.transcript[after:] and self.process.poll() is not None:
                 raise AssertionError(f'ii exited early: {bytes(self.transcript)!r}')
 
     def finish(self):
-        # Drain stderr's pty while waiting so a full terminal buffer cannot deadlock.
+        # Drain stderr while waiting so a full terminal buffer cannot deadlock.
         deadline = time.monotonic() + 10
         while self.process.poll() is None:
             if time.monotonic() > deadline:
                 raise AssertionError('ii did not exit')
-            ready, _, _ = select.select([self.master], [], [], 0.05)
-            if ready:
-                self.transcript.extend(os.read(self.master, 65536))
+            self.drain()
+        self.drain()
         output = self.process.stdout.read()
-        after = termios.tcgetattr(self.slave)
-        assert self.before[3] == after[3], 'terminal local flags were not restored'
-        return self.process.returncode, output
+        self.report.seek(0)
+        result = json.load(self.report)
+        assert result['before'] == result['after'], 'terminal attributes were not restored'
+        assert result['status'] == self.process.returncode, 'supervisor/child status mismatch'
+        return result['status'], output
 
     def close(self):
+        # Also reap a native child blocked in a failing test, not only its supervisor.
         if self.process.poll() is None:
-            self.process.kill()
+            try:
+                os.killpg(self.process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
             self.process.wait()
         self.process.stdout.close()
+        self.report.close()
         os.close(self.master)
         os.close(self.slave)
 
@@ -120,6 +171,7 @@ class TerminalIntegration(unittest.TestCase):
 
     def test_external_term_restores_terminal(self):
         session = self.session()
+        # The supervisor forwards TERM to ii, then observes its cleanup unchanged.
         session.process.send_signal(signal.SIGTERM)
         self.assertEqual(session.finish(), (130, b''))
 

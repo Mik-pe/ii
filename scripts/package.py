@@ -21,7 +21,7 @@ def main() -> None:
     if not binary.is_file():
         raise SystemExit('Build the native release binary first: cargo build --locked --release')
     members = [(binary, binary_name)]
-    for path in ['README.md', 'LICENSE', 'CONTRIBUTING.md', 'docs/ARCHITECTURE.md', 'docs/assets/cover.webp', 'shell/ii.sh', 'shell/ii.fish', 'shell/ii.ps1']:
+    for path in ['README.md', 'LICENSE', 'CONTRIBUTING.md', 'docs/ARCHITECTURE.md', 'docs/PERFORMANCE.md', 'docs/assets/cover.webp', 'shell/ii.sh', 'shell/ii.fish', 'shell/ii.ps1']:
         file = ROOT / path
         if not file.is_file():
             raise SystemExit(f'Missing package file: {path}')
