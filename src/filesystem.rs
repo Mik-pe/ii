@@ -21,11 +21,20 @@ pub struct Entry {
 
 impl Entry {
     pub fn new(path: PathBuf, symlink: bool) -> Self {
-        let name = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy();
+        let name = path
+            .file_name()
+            .unwrap_or(path.as_os_str())
+            .to_string_lossy();
         let hidden = name.starts_with('.');
         let label = safe_label(&name);
         let folded = label.to_lowercase();
-        Self { path, label, folded, hidden, symlink }
+        Self {
+            path,
+            label,
+            folded,
+            hidden,
+            symlink,
+        }
     }
 }
 
@@ -52,18 +61,26 @@ fn scan_cancellable(path: &Path, cancelled: impl Fn() -> bool) -> Option<io::Res
         }
         let item = match item {
             Ok(item) => item,
-            Err(_) => { listing.skipped += 1; continue; }
+            Err(_) => {
+                listing.skipped += 1;
+                continue;
+            }
         };
         let kind = match item.file_type() {
             Ok(kind) => kind,
-            Err(_) => { listing.skipped += 1; continue; }
+            Err(_) => {
+                listing.skipped += 1;
+                continue;
+            }
         };
         if kind.is_dir() {
             listing.entries.push(Entry::new(item.path(), false));
         } else if kind.is_symlink() {
             // Only symlinks need metadata; never recursively follow them.
             match fs::metadata(item.path()) {
-                Ok(metadata) if metadata.is_dir() => listing.entries.push(Entry::new(item.path(), true)),
+                Ok(metadata) if metadata.is_dir() => {
+                    listing.entries.push(Entry::new(item.path(), true))
+                }
                 Ok(_) => {}
                 Err(_) => listing.skipped += 1,
             }
@@ -72,7 +89,9 @@ fn scan_cancellable(path: &Path, cancelled: impl Fn() -> bool) -> Option<io::Res
     if cancelled() {
         return None;
     }
-    listing.entries.sort_unstable_by(|a, b| a.folded.cmp(&b.folded).then_with(|| a.path.cmp(&b.path)));
+    listing
+        .entries
+        .sort_unstable_by(|a, b| a.folded.cmp(&b.folded).then_with(|| a.path.cmp(&b.path)));
     Some(Ok(listing))
 }
 
@@ -104,7 +123,9 @@ struct Shared {
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// One pending request and one result slot, not an unbounded queue of obsolete work.
@@ -116,31 +137,36 @@ impl Scanner {
     pub fn new(name: &str) -> io::Result<Self> {
         let shared = Arc::new(Shared::default());
         let worker = Arc::clone(&shared);
-        thread::Builder::new().name(name.to_owned()).spawn(move || {
-            loop {
-                let request = {
-                    let mut pending = lock(&worker.pending);
-                    while pending.request.is_none() && !pending.closed {
-                        pending = worker.wake.wait(pending).unwrap_or_else(std::sync::PoisonError::into_inner);
-                    }
-                    if pending.closed {
-                        return;
-                    }
-                    pending.request.take()
-                };
-                let Some(request) = request else { continue };
-                let is_obsolete = || worker.generation.load(Ordering::Acquire) != request.id;
-                if let Some(result) = scan_cancellable(&request.path, is_obsolete) {
-                    if !is_obsolete() {
-                        *lock(&worker.result) = Some(ScanResult {
-                            id: request.id,
-                            path: request.path,
-                            result: result.map(Arc::new),
-                        });
+        thread::Builder::new()
+            .name(name.to_owned())
+            .spawn(move || {
+                loop {
+                    let request = {
+                        let mut pending = lock(&worker.pending);
+                        while pending.request.is_none() && !pending.closed {
+                            pending = worker
+                                .wake
+                                .wait(pending)
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        }
+                        if pending.closed {
+                            return;
+                        }
+                        pending.request.take()
+                    };
+                    let Some(request) = request else { continue };
+                    let is_obsolete = || worker.generation.load(Ordering::Acquire) != request.id;
+                    if let Some(result) = scan_cancellable(&request.path, is_obsolete) {
+                        if !is_obsolete() {
+                            *lock(&worker.result) = Some(ScanResult {
+                                id: request.id,
+                                path: request.path,
+                                result: result.map(Arc::new),
+                            });
+                        }
                     }
                 }
-            }
-        })?;
+            })?;
         Ok(Self { shared })
     }
 
@@ -186,7 +212,11 @@ mod tests {
         }
         fs::write(root.path().join("not-a-directory"), "").unwrap();
         let listing = scan(root.path()).unwrap();
-        let names: Vec<_> = listing.entries.iter().map(|entry| entry.label.as_str()).collect();
+        let names: Vec<_> = listing
+            .entries
+            .iter()
+            .map(|entry| entry.label.as_str())
+            .collect();
         assert_eq!(names, [".hidden", "Alpha", "zebra"]);
         assert!(listing.entries[0].hidden);
         assert_eq!(listing.skipped, 0);
@@ -228,7 +258,11 @@ mod tests {
         symlink(root.path().join("real"), root.path().join("alias")).unwrap();
         symlink(root.path().join("missing"), root.path().join("broken")).unwrap();
         let listing = scan(root.path()).unwrap();
-        let alias = listing.entries.iter().find(|entry| entry.label == "alias").unwrap();
+        let alias = listing
+            .entries
+            .iter()
+            .find(|entry| entry.label == "alias")
+            .unwrap();
         assert!(alias.symlink);
         assert_eq!(alias.path, root.path().join("alias"));
         assert_eq!(listing.entries.len(), 2);

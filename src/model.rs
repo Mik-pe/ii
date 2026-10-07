@@ -22,7 +22,10 @@ struct Cache {
 
 impl Cache {
     fn get(&mut self, path: &Path) -> Option<Arc<Listing>> {
-        let index = self.items.iter().position(|(candidate, _)| candidate == path)?;
+        let index = self
+            .items
+            .iter()
+            .position(|(candidate, _)| candidate == path)?;
         let item = self.items.remove(index)?;
         let listing = Arc::clone(&item.1);
         self.items.push_back(item);
@@ -30,7 +33,11 @@ impl Cache {
     }
 
     fn insert(&mut self, path: PathBuf, listing: Arc<Listing>) {
-        if let Some(index) = self.items.iter().position(|(candidate, _)| candidate == &path) {
+        if let Some(index) = self
+            .items
+            .iter()
+            .position(|(candidate, _)| candidate == &path)
+        {
             if let Some((_, old)) = self.items.remove(index) {
                 self.entries -= old.entries.len();
             }
@@ -38,7 +45,9 @@ impl Cache {
         if listing.entries.len() > CACHE_ENTRIES {
             return;
         }
-        while self.items.len() >= CACHE_DIRECTORIES || self.entries + listing.entries.len() > CACHE_ENTRIES {
+        while self.items.len() >= CACHE_DIRECTORIES
+            || self.entries + listing.entries.len() > CACHE_ENTRIES
+        {
             if let Some((_, old)) = self.items.pop_front() {
                 self.entries -= old.entries.len();
             } else {
@@ -81,10 +90,24 @@ pub struct Model {
 impl Model {
     pub fn new(cwd: PathBuf, show_hidden: bool) -> Self {
         Self {
-            cwd, show_hidden, listing: None, visible: Vec::new(), selected: 0, offset: 0,
-            query: String::new(), loading: true, message: None, help: false,
-            preview_path: None, preview: None, preview_error: None, preview_loading: false,
-            cache: Cache::default(), memory: VecDeque::new(), preferred: None, fallback: None,
+            cwd,
+            show_hidden,
+            listing: None,
+            visible: Vec::new(),
+            selected: 0,
+            offset: 0,
+            query: String::new(),
+            loading: true,
+            message: None,
+            help: false,
+            preview_path: None,
+            preview: None,
+            preview_error: None,
+            preview_loading: false,
+            cache: Cache::default(),
+            memory: VecDeque::new(),
+            preferred: None,
+            fallback: None,
         }
     }
 
@@ -121,12 +144,17 @@ impl Model {
         if !self.loading {
             if let Some(listing) = &self.listing {
                 self.fallback = Some(Location {
-                    path: self.cwd.clone(), listing: Arc::clone(listing), selected: self.selected_path(),
+                    path: self.cwd.clone(),
+                    listing: Arc::clone(listing),
+                    selected: self.selected_path(),
                 });
             }
         }
         self.preferred = preferred.or_else(|| {
-            self.memory.iter().find(|(candidate, _)| candidate == &path).map(|(_, selected)| selected.clone())
+            self.memory
+                .iter()
+                .find(|(candidate, _)| candidate == &path)
+                .map(|(_, selected)| selected.clone())
         });
         self.cwd = path;
         self.listing = self.cache.get(&self.cwd);
@@ -163,7 +191,10 @@ impl Model {
 
     /// Parent traversal explicitly selects the directory we just came out of.
     pub fn parent(&self) -> Option<(PathBuf, PathBuf)> {
-        self.cwd.parent().filter(|parent| *parent != self.cwd).map(|parent| (parent.to_owned(), self.cwd.clone()))
+        self.cwd
+            .parent()
+            .filter(|parent| *parent != self.cwd)
+            .map(|parent| (parent.to_owned(), self.cwd.clone()))
     }
 
     pub fn move_selection(&mut self, amount: isize) {
@@ -171,7 +202,10 @@ impl Model {
             self.selected = 0;
             return;
         }
-        self.selected = self.selected.saturating_add_signed(amount).min(self.visible.len() - 1);
+        self.selected = self
+            .selected
+            .saturating_add_signed(amount)
+            .min(self.visible.len() - 1);
         self.message = None;
     }
 
@@ -183,7 +217,8 @@ impl Model {
 
     pub fn push_query(&mut self, text: &str) {
         let remaining = QUERY_CHARACTERS.saturating_sub(self.query.chars().count());
-        self.query.extend(text.chars().filter(|ch| !ch.is_control()).take(remaining));
+        self.query
+            .extend(text.chars().filter(|ch| !ch.is_control()).take(remaining));
         self.rebuild(None);
         self.message = None;
     }
@@ -207,19 +242,35 @@ impl Model {
             let query = self.query.to_lowercase();
             let reveal_hidden = self.show_hidden || query.starts_with('.');
             if query.is_empty() {
-                self.visible.extend(listing.entries.iter().enumerate()
-                    .filter(|(_, entry)| reveal_hidden || !entry.hidden).map(|(index, _)| index));
+                self.visible.extend(
+                    listing
+                        .entries
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, entry)| reveal_hidden || !entry.hidden)
+                        .map(|(index, _)| index),
+                );
             } else {
-                let mut ranked: Vec<_> = listing.entries.iter().enumerate()
+                let mut ranked: Vec<_> = listing
+                    .entries
+                    .iter()
+                    .enumerate()
                     .filter(|(_, entry)| reveal_hidden || !entry.hidden)
-                    .filter_map(|(index, entry)| filter::score(&entry.folded, &query).map(|score| (score, index)))
+                    .filter_map(|(index, entry)| {
+                        filter::score(&entry.folded, &query).map(|score| (score, index))
+                    })
                     .collect();
                 ranked.sort_unstable();
-                self.visible.extend(ranked.into_iter().map(|(_, index)| index));
+                self.visible
+                    .extend(ranked.into_iter().map(|(_, index)| index));
             }
-            self.selected = preferred.and_then(|path| {
-                self.visible.iter().position(|&index| listing.entries[index].path == path)
-            }).unwrap_or(0);
+            self.selected = preferred
+                .and_then(|path| {
+                    self.visible
+                        .iter()
+                        .position(|&index| listing.entries[index].path == path)
+                })
+                .unwrap_or(0);
         } else {
             self.selected = 0;
         }
@@ -246,7 +297,13 @@ mod tests {
     use super::*;
 
     fn listing(root: &Path, names: &[&str]) -> Arc<Listing> {
-        Arc::new(Listing { entries: names.iter().map(|name| Entry::new(root.join(name), false)).collect(), skipped: 0 })
+        Arc::new(Listing {
+            entries: names
+                .iter()
+                .map(|name| Entry::new(root.join(name), false))
+                .collect(),
+            skipped: 0,
+        })
     }
 
     fn model() -> Model {
@@ -337,7 +394,10 @@ mod tests {
     fn cache_is_bounded() {
         let mut cache = Cache::default();
         for index in 0..100 {
-            cache.insert(PathBuf::from(index.to_string()), Arc::new(Listing::default()));
+            cache.insert(
+                PathBuf::from(index.to_string()),
+                Arc::new(Listing::default()),
+            );
         }
         assert_eq!(cache.items.len(), CACHE_DIRECTORIES);
         assert!(cache.get(Path::new("0")).is_none());
