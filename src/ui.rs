@@ -207,7 +207,14 @@ pub fn draw(frame: &mut Frame<'_>, model: &mut Model, theme: Theme, preview_enab
         header,
     );
     let filter = if model.query.is_empty() {
-        Span::styled("type to filter", theme.muted)
+        Span::styled(
+            if model.deep.is_some() {
+                "type a folder name or relative path"
+            } else {
+                "type to filter"
+            },
+            theme.muted,
+        )
     } else {
         Span::raw(tail(
             &safe_label(&model.query),
@@ -215,11 +222,14 @@ pub fn draw(frame: &mut Frame<'_>, model: &mut Model, theme: Theme, preview_enab
         ))
     };
     frame.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled("/ ", theme.accent), filter])),
+        Paragraph::new(Line::from(vec![
+            Span::styled(if model.deep.is_some() { "// " } else { "/ " }, theme.accent),
+            filter,
+        ])),
         search,
     );
 
-    let (entries, preview) = if preview_enabled && area.width >= 90 {
+    let (entries, preview) = if preview_enabled && area.width >= 90 && model.deep.is_none() {
         let [left, right] =
             Layout::horizontal([Constraint::Percentage(56), Constraint::Percentage(44)])
                 .areas(content);
@@ -230,7 +240,9 @@ pub fn draw(frame: &mut Frame<'_>, model: &mut Model, theme: Theme, preview_enab
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(theme.border)
-        .title(if model.dirs_only {
+        .title(if model.deep.is_some() {
+            " DEEP SEARCH · folders "
+        } else if model.dirs_only {
             " FOLDERS "
         } else {
             " CONTENTS "
@@ -240,6 +252,14 @@ pub fn draw(frame: &mut Frame<'_>, model: &mut Model, theme: Theme, preview_enab
     if model.visible.is_empty() {
         let message = if model.loading {
             "Reading directory…"
+        } else if let Some(deep) = &model.deep {
+            if model.query.is_empty() {
+                "Type to search below this folder. Esc goes back."
+            } else if !deep.progress.done {
+                "Searching below this folder…"
+            } else {
+                "No matching subfolders. Ctrl-L retries; Esc goes back."
+            }
         } else if !model.query.is_empty() {
             "No matches. Esc clears the filter."
         } else if model.listing.is_none() {
@@ -283,6 +303,28 @@ pub fn draw(frame: &mut Frame<'_>, model: &mut Model, theme: Theme, preview_enab
         Line::styled(tail(message, status.width as usize), theme.warning)
     } else if model.loading {
         Line::styled("Reading directory…  Esc cancels", theme.muted)
+    } else if let Some(deep) = &model.deep {
+        let progress = &deep.progress;
+        if let Some(error) = &progress.error {
+            Line::styled(tail(error, status.width as usize), theme.warning)
+        } else {
+            let state = if !progress.done {
+                "searching"
+            } else if progress.limited {
+                "limited · narrow scope"
+            } else {
+                "done"
+            };
+            Line::styled(
+                format!(
+                    "{state} · {} folders · {} checked · {} skipped",
+                    model.visible.len(),
+                    progress.visited,
+                    progress.skipped
+                ),
+                theme.muted,
+            )
+        }
     } else {
         let selected = if model.visible.is_empty() {
             0
@@ -312,14 +354,16 @@ pub fn draw(frame: &mut Frame<'_>, model: &mut Model, theme: Theme, preview_enab
     };
     frame.render_widget(Paragraph::new(text), status);
     let file_selected = model.selected_entry().is_some_and(|entry| !entry.is_dir());
-    let hints = if keys.width >= 85 && !file_selected {
-        "↑↓ select  →/Tab open  ← up  Enter cd here  Ctrl-F files  ? help"
+    let hints = if model.deep.is_some() {
+        "↑↓ select  Tab/→ open result  Enter cd here  Esc back"
+    } else if keys.width >= 85 && !file_selected {
+        "↑↓ select  →/Tab open  ← up  Enter cd  Ctrl-R deep  Ctrl-F files  ? help"
     } else if file_selected && keys.width >= 52 {
         "↑↓ select  ← up  Enter cd here  Ctrl-F files  ? help"
     } else if file_selected {
         "↑↓ select  ← up  Enter cd  ? help"
     } else {
-        "↑↓ select  →/Tab in  ← up  Enter cd  ? help"
+        "↑↓ select  →/Tab in ← up  Enter cd  ? help"
     };
     frame.render_widget(Paragraph::new(hints).style(theme.muted), keys);
     if model.help {
@@ -419,7 +463,7 @@ fn draw_preview(frame: &mut Frame<'_>, area: Rect, model: &Model, theme: Theme) 
 
 fn draw_help(frame: &mut Frame<'_>, area: Rect, theme: Theme) {
     let width = area.width.saturating_sub(2).min(74);
-    let height = area.height.saturating_sub(2).min(21);
+    let height = area.height.saturating_sub(2).min(22);
     let popup = Rect::new(
         area.x + (area.width - width) / 2,
         area.y + (area.height - height) / 2,
@@ -437,6 +481,7 @@ fn draw_help(frame: &mut Frame<'_>, area: Rect, theme: Theme) {
         "Esc            Clear filter; otherwise cancel without cd",
         "Ctrl-C / Ctrl-D Cancel immediately",
         "Ctrl-F         Show / hide files (directories stay first)",
+        "Ctrl-R         Deep folder search; Esc returns to browsing",
         ".              Toggle hidden entries when filter is empty",
         "Ctrl-U         Clear the filter",
         "Ctrl-L         Refresh the current directory",
@@ -638,5 +683,33 @@ mod tests {
             .unwrap();
         assert!(!text(&terminal).contains('\x1b'));
         assert!(text(&terminal).contains("ii"));
+    }
+
+    #[test]
+    fn deep_view_has_relative_paths_and_explicit_limit_and_completion_hints() {
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        let mut model = mixed_model();
+        model.toggle_deep();
+        model.push_query("api");
+        let mut entry = Entry::new(PathBuf::from("/code/server/services/api"), false);
+        entry.label = "server/services/api".into();
+        entry.folded = entry.label.clone();
+        model.apply_deep(crate::deep::Progress {
+            listing: Arc::new(Listing {
+                entries: vec![entry],
+                skipped: 0,
+            }),
+            limited: true,
+            done: true,
+            ..crate::deep::Progress::default()
+        });
+        terminal
+            .draw(|frame| draw(frame, &mut model, Theme::new(false), false))
+            .unwrap();
+        let rendered = text(&terminal);
+        assert!(rendered.contains("DEEP SEARCH"));
+        assert!(rendered.contains("server/services/api"));
+        assert!(rendered.contains("limited"));
+        assert!(rendered.contains("Enter cd here"));
     }
 }

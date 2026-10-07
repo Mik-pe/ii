@@ -8,6 +8,7 @@ use crossterm::style::ResetColor;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
+use ii::deep::{Controller, Progress};
 use ii::filesystem::Scanner;
 use ii::filter::safe_label;
 use ii::model::Model;
@@ -21,7 +22,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-const HELP: &str = "ii — two taps, any directory\n\nUSAGE\n    ii [OPTIONS] [PATH]\n    ii init <bash|zsh|fish|powershell>\n\nOPTIONS\n    -a, --hidden       Show hidden entries\n        --dirs-only    Start with files hidden (Ctrl-F toggles)\n        --no-preview   Use a single directory pane\n        --no-color     Use your terminal colors (also honors NO_COLOR)\n        --print0       Terminate the selected path with NUL (for scripts)\n    -h, --help         Print this help\n    -V, --version      Print the version\n        --             Treat the remaining argument as a path\n\nKEYS\n    ↑↓ select   → open folder   ← parent   Enter cd here   Tab open folder\n    Type to filter folders and files. Ctrl-F shows/hides files.\n    Files have name-based colors and type labels; they are never opened or executed.\n    Esc clears the filter, then cancels. Ctrl-C always cancels.\n    . toggles hidden entries. Ctrl-L refreshes. ? opens help.\n\nSHELL SETUP (once in your shell profile)\n    bash:       eval \"$(ii init bash)\"\n    zsh:        eval \"$(ii init zsh)\"\n    fish:       ii init fish | source\n    PowerShell: ii.exe init powershell | Out-String | Invoke-Expression\n\nPowerShell setup replaces the built-in ii alias for Invoke-Item.\nThe UI uses stderr. A successful selection writes only the raw absolute path\n(with no trailing newline) to stdout. Cancellation exits 130 with no path.\nA subprocess cannot change its parent directory: install the shell function.\n";
+const HELP: &str = "ii — two taps, any directory\n\nUSAGE\n    ii [OPTIONS] [PATH]\n    ii init <bash|zsh|fish|powershell>\n\nOPTIONS\n    -a, --hidden       Show hidden entries\n        --dirs-only    Start with files hidden (Ctrl-F toggles)\n        --no-preview   Use a single directory pane\n        --no-color     Use your terminal colors (also honors NO_COLOR)\n        --print0       Terminate the selected path with NUL (for scripts)\n    -h, --help         Print this help\n    -V, --version      Print the version\n        --             Treat the remaining argument as a path\n\nKEYS\n    ↑↓ select   → open folder   ← parent   Enter cd here   Tab open folder\n    Type to filter folders and files. Ctrl-F shows/hides files. Ctrl-R searches descendant folders.\n    Files have name-based colors and type labels; they are never opened or executed.\n    Esc clears the filter, then cancels. Ctrl-C always cancels.\n    . toggles hidden entries. Ctrl-L refreshes. ? opens help.\n\nSHELL SETUP (once in your shell profile)\n    bash:       eval \"$(ii init bash)\"\n    zsh:        eval \"$(ii init zsh)\"\n    fish:       ii init fish | source\n    PowerShell: ii.exe init powershell | Out-String | Invoke-Expression\n\nPowerShell setup replaces the built-in ii alias for Invoke-Item.\nThe UI uses stderr. A successful selection writes only the raw absolute path\n(with no trailing newline) to stdout. Cancellation exits 130 with no path.\nA subprocess cannot change its parent directory: install the shell function.\n";
 
 #[derive(Default)]
 struct Options {
@@ -175,6 +176,14 @@ fn key_intent(model: &mut Model, key: KeyEvent, page: isize, home: Option<&Path>
     }
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         return match key.code {
+            KeyCode::Char('r') => {
+                model.toggle_deep();
+                Intent::None
+            }
+            KeyCode::Char('l') if model.deep.is_some() => {
+                model.refresh_deep();
+                Intent::None
+            }
             KeyCode::Char('f') => {
                 model.toggle_files();
                 Intent::None
@@ -205,6 +214,8 @@ fn key_intent(model: &mut Model, key: KeyEvent, page: isize, home: Option<&Path>
         KeyCode::PageDown => model.move_selection(page),
         KeyCode::Home => model.move_selection(isize::MIN),
         KeyCode::End => model.move_selection(isize::MAX),
+        KeyCode::Esc | KeyCode::Left if model.deep.is_some() => model.leave_deep(),
+        KeyCode::Backspace if model.deep.is_some() && model.query.is_empty() => model.leave_deep(),
         KeyCode::Left => return parent(model),
         KeyCode::Right | KeyCode::Tab => {
             return model
@@ -263,6 +274,7 @@ fn run(options: &Options) -> io::Result<Option<PathBuf>> {
     let interrupted = interrupted_flag()?;
     let navigation = Scanner::new("ii-navigation")?;
     let previews = Scanner::new("ii-preview")?;
+    let mut deep_search = Controller::default();
     let _session = Session::start()?;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stderr()))?;
     let mut model = Model::new(start, options.hidden);
@@ -286,7 +298,10 @@ fn run(options: &Options) -> io::Result<Option<PathBuf>> {
             && result.path == model.cwd
         {
             match result.result {
-                Ok(listing) => model.complete_navigation(listing),
+                Ok(listing) => {
+                    model.cwd = result.resolved_path;
+                    model.complete_navigation(listing);
+                }
                 Err(error) => {
                     finish = false;
                     model.fail_navigation(format!("{}: {}", result.path.display(), error));
@@ -299,7 +314,23 @@ fn run(options: &Options) -> io::Result<Option<PathBuf>> {
         if !model.loading && std::mem::take(&mut finish) && model.listing.is_some() {
             return Ok(Some(model.cwd));
         }
-        let preview_enabled = !options.no_preview && size.width >= 90;
+        // Disabled and empty search do not create a worker or recurse.
+        match deep_search.update(model.deep_query(), Instant::now()) {
+            Ok(Some(progress)) => {
+                model.apply_deep(progress);
+                dirty = true;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                model.apply_deep(Progress {
+                    done: true,
+                    error: Some(safe_label(&error.to_string())),
+                    ..Progress::default()
+                });
+                dirty = true;
+            }
+        }
+        let preview_enabled = !options.no_preview && size.width >= 90 && model.deep.is_none();
         let desired = if preview_enabled && !model.loading {
             model.selected_directory()
         } else {
@@ -345,7 +376,11 @@ fn run(options: &Options) -> io::Result<Option<PathBuf>> {
             terminal.draw(|frame| ui::draw(frame, &mut model, theme, preview_enabled))?;
             dirty = false;
         }
-        let wait = if model.loading || model.preview_loading || preview_deadline.is_some() {
+        let wait = if model.loading
+            || model.preview_loading
+            || preview_deadline.is_some()
+            || model.deep.as_ref().is_some_and(|deep| !deep.progress.done)
+        {
             Duration::from_millis(8)
         } else {
             Duration::from_millis(250)
@@ -446,10 +481,10 @@ mod tests {
         assert!(parse(["--wat"].map(OsString::from)).is_err());
         assert!(parse(["a", "b"].map(OsString::from)).is_err());
         assert!(parse(["init", "nonsense"].map(OsString::from)).is_err());
-        let Command::Run(options) =
-            parse(["--hidden", "--dirs-only", "--", "-folder"].map(OsString::from))
-                .unwrap_or_else(|_| panic!("parse failed"))
-        else {
+        let Command::Run(options) = parse(
+            ["--hidden", "--dirs-only", "--", "-folder"].map(OsString::from),
+        )
+        .unwrap_or_else(|_| panic!("parse failed")) else {
             panic!("not run")
         };
         assert!(options.hidden);
@@ -666,5 +701,36 @@ mod tests {
             ),
             Intent::Finish
         ));
+    }
+
+    #[test]
+    fn ctrl_r_opens_search_escape_restores_browsing_enter_remains_only_finish() {
+        let root = PathBuf::from("/code");
+        let mut model = Model::new(root.clone(), false);
+        model.complete_navigation(Arc::new(Listing {
+            entries: vec![Entry::new(root.join("app"), false)],
+            skipped: 0,
+        }));
+        let plain = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        assert!(matches!(
+            key_intent(
+                &mut model,
+                KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+                10,
+                None
+            ),
+            Intent::None
+        ));
+        assert!(model.deep.is_some());
+        assert!(matches!(
+            key_intent(&mut model, plain(KeyCode::Enter), 10, None),
+            Intent::Finish
+        ));
+        assert!(matches!(
+            key_intent(&mut model, plain(KeyCode::Esc), 10, None),
+            Intent::None
+        ));
+        assert!(model.deep.is_none());
+        assert_eq!(model.cwd, root);
     }
 }

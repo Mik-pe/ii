@@ -51,7 +51,7 @@ sys.exit(code if code >= 0 else 128 - code)
 
 
 class Session:
-    def __init__(self, path, *options, preview=False):
+    def __init__(self, path, *options, preview=False, cwd=None):
         self.master, self.slave = pty.openpty()
         fcntl.ioctl(self.slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 100, 0, 0))
         self.transcript = bytearray()
@@ -62,7 +62,7 @@ class Session:
                  str(BINARY), *([] if preview else ['--no-preview']), *options, str(path)],
                 stdin=self.slave, stderr=self.slave, stdout=subprocess.PIPE,
                 pass_fds=(self.report.fileno(),), start_new_session=True,
-                env=dict(os.environ, TERM='xterm-256color'))
+                env=dict(os.environ, TERM='xterm-256color'), cwd=cwd)
         except BaseException:
             self.report.close()
             os.close(self.master)
@@ -279,6 +279,75 @@ class TerminalIntegration(unittest.TestCase):
         session.assert_navigating()
         session.send(b'\x1b[B\x1b[C\r')
         self.assertEqual(session.finish(), (0, os.fsencode(str(self.root / 'app/tests'))))
+
+    def test_relative_parent_is_resolved_before_navigation_and_output(self):
+        session = Session(Path('..'), cwd=self.root / 'app')
+        self.sessions.append(session)
+        session.expect(b'tools')
+        mark = session.send(b'\t')
+        session.expect(b'src', mark)
+        session.assert_navigating()
+        session.send(b'\x1b[D\r')
+        self.assertEqual(session.finish(), (0, os.fsencode(str(self.root.resolve()))))
+
+    def test_dotdot_argument_enter_returns_clean_parent_path(self):
+        session = Session(Path('../..'), cwd=self.root / 'app' / 'src')
+        self.sessions.append(session)
+        session.expect(b'tools')
+        session.send(b'\r')
+        self.assertEqual(session.finish(), (0, os.fsencode(str(self.root.resolve()))))
+
+    def test_deep_search_finds_descendant_and_tab_stays_interactive(self):
+        target = self.root / 'app' / 'server' / 'services' / 'endpoints'
+        target.mkdir(parents=True)
+        session = self.session()
+        mark = session.send(b'endpoints\x12')
+        session.expect(b'DEEP SEARCH', mark)
+        session.expect(b'done', mark)
+        session.assert_navigating()
+        session.send(b'\t')
+        session.assert_navigating()
+        session.send(b'\r')
+        self.assertEqual(session.finish(), (0, os.fsencode(str(target))))
+
+    def test_plain_filter_does_not_search_recursively(self):
+        (self.root / 'app' / 'only-deep-match').mkdir()
+        session = self.session()
+        session.send(b'only-deep-match\t\r')
+        self.assertEqual(session.finish(), (0, os.fsencode(str(self.root))))
+
+    def test_escape_from_deep_search_restores_previous_selection(self):
+        (self.root / 'app' / 'server' / 'api').mkdir(parents=True)
+        session = self.session()
+        mark = session.send(b'\x1b[F\x12api')
+        session.expect(b'done', mark)
+        session.assert_navigating()
+        session.send(b'\x1b')
+        session.assert_navigating()
+        session.send(b'\t\r')
+        self.assertEqual(session.finish(), (0, os.fsencode(str(self.root / 'tools'))))
+
+    def test_deep_query_change_clears_stale_navigation_targets(self):
+        (self.root / 'app' / 'server' / 'api').mkdir(parents=True)
+        session = self.session()
+        mark = session.send(b'\x12api')
+        session.expect(b'done', mark)
+        session.assert_navigating()
+        session.send(b'\x15zzzz\t\r')
+        self.assertEqual(session.finish(), (0, os.fsencode(str(self.root))))
+
+    def test_enter_in_search_only_confirms_header_not_selected_result(self):
+        (self.root / 'app' / 'server' / 'api').mkdir(parents=True)
+        session = self.session()
+        mark = session.send(b'\x12api')
+        session.expect(b'done', mark)
+        session.send(b'\r')
+        self.assertEqual(session.finish(), (0, os.fsencode(str(self.root))))
+
+    def test_deep_search_can_be_cancelled_without_cd(self):
+        session = self.session()
+        session.send(b'\x12anything\x03')
+        self.assertEqual(session.finish(), (130, b''))
 
 
 if __name__ == '__main__':

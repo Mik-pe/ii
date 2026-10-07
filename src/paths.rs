@@ -9,7 +9,10 @@ use std::path::{Component, Path, PathBuf};
 /// give the wrong location for `symlink/..`. Windows absolute() uses native rules.
 pub fn resolve(path: &Path) -> io::Result<PathBuf> {
     let absolute = std::path::absolute(path)?;
-    if absolute.components().any(|part| part == Component::ParentDir) {
+    if absolute
+        .components()
+        .any(|part| part == Component::ParentDir)
+    {
         std::fs::canonicalize(absolute)
     } else {
         Ok(absolute)
@@ -26,10 +29,20 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("app/src")).unwrap();
         let resolved = resolve(&root.path().join("app/src/.././..")).unwrap();
-        assert_eq!(fs::canonicalize(&resolved).unwrap(), fs::canonicalize(root.path()).unwrap());
+        assert_eq!(
+            fs::canonicalize(&resolved).unwrap(),
+            fs::canonicalize(root.path()).unwrap()
+        );
         assert!(resolved.is_absolute());
-        assert!(!resolved.components().any(|part| matches!(part, Component::ParentDir | Component::CurDir)));
-        assert_eq!(resolve(Path::new(".")).unwrap(), std::env::current_dir().unwrap());
+        assert!(
+            !resolved
+                .components()
+                .any(|part| matches!(part, Component::ParentDir | Component::CurDir))
+        );
+        assert_eq!(
+            resolve(Path::new(".")).unwrap(),
+            std::env::current_dir().unwrap()
+        );
     }
 
     #[test]
@@ -46,8 +59,14 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("real/child")).unwrap();
         symlink(root.path().join("real/child"), root.path().join("alias")).unwrap();
-        assert_eq!(resolve(&root.path().join("alias")).unwrap(), root.path().join("alias"));
-        assert_eq!(resolve(&root.path().join("alias/..")).unwrap(), fs::canonicalize(root.path().join("real")).unwrap());
+        assert_eq!(
+            resolve(&root.path().join("alias")).unwrap(),
+            root.path().join("alias")
+        );
+        assert_eq!(
+            resolve(&root.path().join("alias/..")).unwrap(),
+            fs::canonicalize(root.path().join("real")).unwrap()
+        );
         assert!(resolve(&root.path().join("missing/..")).is_err());
     }
 

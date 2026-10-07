@@ -226,7 +226,10 @@ struct Request {
 #[derive(Debug)]
 pub struct ScanResult {
     pub id: u64,
+    /// Original request path, used for stale-result rejection.
     pub path: PathBuf,
+    /// Location used to construct every returned child path.
+    pub resolved_path: PathBuf,
     pub result: io::Result<Arc<Listing>>,
 }
 
@@ -278,12 +281,25 @@ impl Scanner {
                     };
                     let Some(request) = request else { continue };
                     let is_obsolete = || worker.generation.load(Ordering::Acquire) != request.id;
-                    if let Some(result) = scan_cancellable(&request.path, is_obsolete)
-                        && !is_obsolete()
-                    {
-                        *lock(&worker.result) = Some(ScanResult {
+                    let resolved = crate::paths::resolve(&request.path);
+                    if is_obsolete() {
+                        continue;
+                    }
+                    let (resolved_path, result) = match resolved {
+                        Ok(path) => {
+                            let Some(result) = scan_cancellable(&path, is_obsolete) else {
+                                continue;
+                            };
+                            (path, result)
+                        }
+                        Err(error) => (request.path.clone(), Err(error)),
+                    };
+                    let mut output = lock(&worker.result);
+                    if !is_obsolete() {
+                        *output = Some(ScanResult {
                             id: request.id,
                             path: request.path,
+                            resolved_path,
                             result: result.map(Arc::new),
                         });
                     }
@@ -466,5 +482,36 @@ mod tests {
         let listing = scan(root.path()).unwrap();
         assert_eq!(listing.entries[0].path, directory);
         assert_eq!(listing.entries[1].path, file);
+    }
+
+    #[test]
+    fn worker_resolves_parent_before_constructing_children() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("app/src")).unwrap();
+        let scanner = Scanner::new("ii-path-test").unwrap();
+        let requested = root.path().join("app/..");
+        let id = scanner.request(requested.clone());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(result) = scanner.poll() {
+                assert_eq!(result.id, id);
+                assert_eq!(result.path, requested);
+                assert_eq!(
+                    fs::canonicalize(&result.resolved_path).unwrap(),
+                    fs::canonicalize(root.path()).unwrap()
+                );
+                let listing = result.result.unwrap();
+                assert_eq!(listing.entries[0].path, result.resolved_path.join("app"));
+                assert!(
+                    !listing.entries[0]
+                        .path
+                        .components()
+                        .any(|part| part == std::path::Component::ParentDir)
+                );
+                break;
+            }
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(1));
+        }
     }
 }

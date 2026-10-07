@@ -1,4 +1,4 @@
-# Temporary read-only review job. No credentials persisted and no repository writes.
+# Temporary read-only review job; removed before merge.
 name: Review deep search
 on:
   push:
@@ -27,12 +27,9 @@ jobs:
       - name: Render UI fixture
         if: always()
         run: cargo run --locked --example render_demo > docs/assets/demo.svg
-      - name: Copy formatter and its runtime libraries
+      - name: Benchmarks
         if: always()
-        run: |
-          mkdir -p review-tools
-          cp "$(rustup which rustfmt)" review-tools/rustfmt
-          cp -L "$(rustc --print sysroot)"/lib/*.so* review-tools/
+        run: cargo bench --locked --bench navigation
       - name: Review artifacts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -51,6 +48,5 @@ jobs:
             CONTRIBUTING.md
             Cargo.toml
             Cargo.lock
-            review-tools/
             target/release/ii
           if-no-files-found: error
