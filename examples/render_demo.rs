@@ -91,7 +91,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )?;
             }
             let text: String = cells[start..end].iter().map(|cell| cell.symbol()).collect();
-            if !text.trim().is_empty() {
+            let text = text.trim_end_matches(' ');
+            if !text.is_empty() {
+                let positions = cells[start..end]
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(offset, cell)| {
+                        let x = (start + offset) * 10;
+                        cell.symbol().chars().map(move |_| x.to_string())
+                    })
+                    .take(text.chars().count())
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 let weight = if first.modifier.contains(Modifier::BOLD) {
                     700
                 } else {
@@ -99,9 +110,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
                 writeln!(
                     out,
-                    "<text x=\"{x}\" y=\"{baseline}\" fill=\"{}\" font-weight=\"{weight}\" xml:space=\"preserve\" textLength=\"{width}\" lengthAdjust=\"spacingAndGlyphs\">{}</text>",
+                    "<text x=\"{positions}\" y=\"{baseline}\" fill=\"{}\" font-weight=\"{weight}\" xml:space=\"preserve\">{}</text>",
                     color(first.fg, "#cbd5e1"),
-                    escape(&text)
+                    escape(text)
                 )?;
             }
             start = end;
