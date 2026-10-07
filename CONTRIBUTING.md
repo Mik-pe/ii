@@ -27,7 +27,7 @@ The optional `justfile` wraps these commands; `just` is not a runtime or build d
 
 ## Change checklist
 
-Preserve arrow semantics, the distinction between Enter and Tab, and selection when returning to a parent. Do not use ordinary letters as navigation shortcuts while they are expected to filter. Keep slow filesystem work off the input thread and bounded: avoid whole-tree scans, one thread per keypress, and unbounded queues.
+Preserve arrow semantics and selection when returning to a parent. Tab and Right only enter a directory inside the UI; Enter is the only key that confirms cd in the shell. Test that Tab stays interactive, emits no stdout path, and can be followed by cancellation. Do not use ordinary letters as navigation shortcuts while they are expected to filter. Keep slow filesystem work off the input thread and bounded: avoid whole-tree scans, one thread per keypress, and unbounded queues.
 
 Never replace an original path with its display label. Do not use `eval`, wildcard expansion, or whitespace splitting on selected paths. Exercise spaces, quotes, shell metacharacters, Unicode, invalid UTF-8 on Unix, and embedded/trailing newlines when changing the output or shell protocol.
 

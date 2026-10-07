@@ -74,6 +74,15 @@ class Session:
         os.write(self.master, data)
         return mark
 
+    def assert_navigating(self):
+        # A ready stdout pipe means data or EOF: neither is allowed before Enter.
+        deadline = time.monotonic() + 0.15
+        while time.monotonic() < deadline:
+            self.drain()
+        assert self.process.poll() is None, 'navigation unexpectedly exited the UI'
+        ready, _, _ = select.select([self.process.stdout], [], [], 0)
+        assert not ready, 'navigation wrote a path or closed stdout before Enter'
+
     def drain(self):
         ready, _, _ = select.select([self.master], [], [], 0.05)
         if ready:
@@ -145,18 +154,24 @@ class TerminalIntegration(unittest.TestCase):
         session.send(b'\x1b[B\x1b[C\r')
         self.assertEqual(session.finish(), (0, os.fsencode(str(self.root / 'app/tests'))))
 
-    def test_parent_remembers_selection_and_tab_finishes(self):
+    def test_parent_remembers_selection_and_tab_stays_in_ui(self):
         session = self.session()
         mark = session.send(b'\x1b[F\x1b[C')
         session.expect(b'lib', mark)
         mark = session.send(b'\x1b[D')
         session.expect(b'app', mark)
-        session.send(b'\t')
+        mark = session.send(b'\t')
+        session.expect(b'lib', mark)
+        session.assert_navigating()
+        session.send(b'\r')
         self.assertEqual(session.finish(), (0, os.fsencode(str(self.root / 'tools'))))
 
     def test_filter_then_tab(self):
         session = self.session()
-        session.send(b'tl\t')
+        mark = session.send(b'tl\t')
+        session.expect(b'lib', mark)
+        session.assert_navigating()
+        session.send(b'\r')
         self.assertEqual(session.finish(), (0, os.fsencode(str(self.root / 'tools'))))
 
     def test_cancel_never_prints_a_path(self):
@@ -200,7 +215,7 @@ class TerminalIntegration(unittest.TestCase):
         session.expect(b'README.md', mark)
         # Filter selects the file; Ctrl-U clears the filter without changing it.
         # Hiding files must then select the first folder, not keep an invalid index.
-        session.send(b'readme\x15\x06\t')
+        session.send(b'readme\x15\x06\t\r')
         self.assertEqual(session.finish(), (0, os.fsencode(str(self.root / 'app'))))
 
     def test_file_only_directory_can_be_selected_without_opening_any_file(self):
@@ -226,6 +241,44 @@ class TerminalIntegration(unittest.TestCase):
         self.assertNotIn(b'48;2;', session.transcript)
         session.send(b'\x03')
         self.assertEqual(session.finish(), (130, b''))
+
+    def test_tab_can_navigate_multiple_levels_then_cancel_without_cd(self):
+        session = self.session()
+        mark = session.send(b'\t')
+        session.expect(b'src', mark)
+        session.assert_navigating()
+        mark = session.send(b'\t')
+        # The new header suffix confirms entry into the empty app/src directory.
+        # Do not expect full messages or counters: unchanged cells are not emitted.
+        session.expect(b'/src', mark)
+        session.assert_navigating()
+        session.send(b'\t')
+        session.assert_navigating()
+        session.send(b'\x1b')
+        self.assertEqual(session.finish(), (130, b''))
+
+    def test_empty_directory_tab_never_finishes(self):
+        path = self.root / 'app' / 'src'
+        self.assertEqual(list(path.iterdir()), [])
+        session = self.session(path)
+        session.assert_navigating()
+        session.send(b'\t')
+        session.assert_navigating()
+        session.send(b'\r')
+        self.assertEqual(session.finish(), (0, os.fsencode(str(path))))
+
+    def test_tab_then_enter_in_one_burst_finishes_in_the_entered_directory(self):
+        session = self.session()
+        session.send(b'\t\r')
+        self.assertEqual(session.finish(), (0, os.fsencode(str(self.root / 'app'))))
+
+    def test_tab_then_right_can_continue_navigation_before_enter(self):
+        session = self.session()
+        mark = session.send(b'\t')
+        session.expect(b'src', mark)
+        session.assert_navigating()
+        session.send(b'\x1b[B\x1b[C\r')
+        self.assertEqual(session.finish(), (0, os.fsencode(str(self.root / 'app/tests'))))
 
 
 if __name__ == '__main__':

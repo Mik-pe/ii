@@ -99,7 +99,7 @@ Files can be selected and filtered, but **Right and Tab never open, execute, or 
 | **→** | Open the selected **directory**. |
 | **←** | Go up and reselect the directory you just left. |
 | **Enter** | Finish in the current directory shown in the header. |
-| **Tab** | Open the selected **directory** and finish there. |
+| **Tab** | Open the selected **directory** inside the UI, just like **→**. |
 | **Type** | Fuzzy-filter folders and files immediately. |
 | **Ctrl-F** | Show / hide files. |
 | **Backspace** | Erase a grapheme; go up when the filter is empty. |
@@ -112,7 +112,7 @@ Files can be selected and filtered, but **Right and Tab never open, execute, or 
 | **Ctrl-N / Ctrl-P** | Alternative down / up bindings. |
 | **? / F1** | Toggle help. |
 
-`Enter` always means **“take my shell here.”** `→` explores; `Tab` is the selected-folder shortcut. An Enter or Tab pressed while a directory loads is remembered. File guards apply to that delayed Tab too.
+**Enter is the only key that confirms a directory change in your shell.** Both `→` and `Tab` open the selected directory inside the UI and let you keep browsing. They never exit, and do nothing to files. After any number of navigation steps, `Esc` still cancels without changing the shell directory. An Enter pressed while a directory loads is remembered; navigation keys never queue a finish.
 
 Selection is remembered within the session, including when returning to a parent or revisiting a directory. There is no persistent history or hidden prediction model.
 

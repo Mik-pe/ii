@@ -17,9 +17,9 @@ The library boundary makes navigation and rendering testable without a terminal.
 
 ## Navigation contract
 
-The header path is the current location. Right enters a selected directory; Enter finishes at the header path. Tab combines opening a selected directory with finishing. Left goes to the parent and selects the directory just exited.
+The header path is the current location. Right and Tab enter a selected directory inside the UI without exiting. Only Enter finishes at the header path and returns it for the shell to cd into. Left goes to the parent and selects the directory just exited.
 
-Files are visible and selectable by default, but are context, not actions. `EntryKind` distinguishes directories, regular files with name-based categories, unresolved links, and special entries. Both Right and delayed Tab call `Model::directory_target`, which returns only a directory path and otherwise supplies an explanatory message. Preview scheduling calls `selected_directory`, so a selected file cannot trigger `read_dir(file)`. The detail pane only uses already-known labels/kinds. No file contents are read and no file is executed.
+Files are visible and selectable by default, but are context, not actions. `EntryKind` distinguishes directories, regular files with name-based categories, unresolved links, and special entries. Right and Tab share the same input branch and call `Model::directory_target`, which returns only a directory path and otherwise supplies an explanatory message. Preview scheduling calls `selected_directory`, so a selected file cannot trigger `read_dir(file)`. The detail pane only uses already-known labels/kinds. No file contents are read and no file is executed.
 
 Directories sort before all other entries, including during fuzzy filtering; scores rank matches within each group. Ctrl-F toggles `dirs_only`, also available as a starting CLI flag. It uses the existing listing without new I/O, retains the query and a still-visible selection, and otherwise selects the first visible match. Hidden entries are controlled independently. The preview pane follows the visibility settings but does not inherit the current directory's name filter.
 
@@ -27,7 +27,7 @@ Visible folder/file/other counts are cached during model rebuilding. Arrow-key m
 
 Navigation stores selection for up to 128 directories in the session. It never writes history. Sorted order determines first-visit selection; there is no inferred likely directory that unpredictably reorders the UI.
 
-Transitions are provisional until their scan succeeds. Cached contents can appear immediately; a failed transition restores the last successful location. Enter/Tab received during a scan is kept as a pending finish. A later key cancels that pending intention instead of unexpectedly exiting later. Directories can change between scanning and the shell's `cd`; the shell remains the final authority.
+Transitions are provisional until their scan succeeds. Cached contents can appear immediately; a failed transition restores the last successful location. Only Enter received during a scan is kept as a pending finish. Tab and Right act on the currently available selected directory; without an available selection they are no-ops and never schedule completion. A later key cancels that pending intention instead of unexpectedly exiting later. Directories can change between scanning and the shell's `cd`; the shell remains the final authority.
 
 ## I/O and backpressure
 
