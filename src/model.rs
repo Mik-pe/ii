@@ -1,13 +1,11 @@
 //! Pure navigation state. No terminal I/O and no synchronous filesystem calls.
 
+use crate::filesystem::{Entry, EntryKind, Listing};
+use crate::filter;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-
 use unicode_segmentation::UnicodeSegmentation;
-
-use crate::filesystem::{Entry, Listing};
-use crate::filter;
 
 const CACHE_DIRECTORIES: usize = 32;
 const CACHE_ENTRIES: usize = 100_000;
@@ -65,14 +63,24 @@ struct Location {
     selected: Option<PathBuf>,
 }
 
+/// Recomputed only when visibility changes, never on every arrow key or render.
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Counts {
+    pub folders: usize,
+    pub files: usize,
+    pub other: usize,
+}
+
 pub struct Model {
     pub cwd: PathBuf,
     pub listing: Option<Arc<Listing>>,
     pub visible: Vec<usize>,
+    pub counts: Counts,
     pub selected: usize,
     pub offset: usize,
     pub query: String,
     pub show_hidden: bool,
+    pub dirs_only: bool,
     pub loading: bool,
     pub message: Option<String>,
     pub help: bool,
@@ -91,8 +99,10 @@ impl Model {
         Self {
             cwd,
             show_hidden,
+            dirs_only: false,
             listing: None,
             visible: Vec::new(),
+            counts: Counts::default(),
             selected: 0,
             offset: 0,
             query: String::new(),
@@ -117,6 +127,38 @@ impl Model {
 
     pub fn selected_path(&self) -> Option<PathBuf> {
         self.selected_entry().map(|entry| entry.path.clone())
+    }
+
+    /// Used by preview scheduling: files must never be passed to a directory scan.
+    pub fn selected_directory(&self) -> Option<PathBuf> {
+        self.selected_entry()
+            .filter(|entry| entry.is_dir())
+            .map(|entry| entry.path.clone())
+    }
+
+    /// Right and Tab share this guard, including Tab remembered during loading.
+    pub fn directory_target(&mut self) -> Option<PathBuf> {
+        if let Some(path) = self.selected_directory() {
+            return Some(path);
+        }
+        self.message = self.selected_entry().map(|entry| {
+            match entry.kind {
+                EntryKind::UnresolvedLink => {
+                    "Link target unavailable. Enter changes to the current folder."
+                }
+                EntryKind::Special => {
+                    "Special entry; not opened. Enter changes to the current folder."
+                }
+                _ => "File selected. Enter changes to this folder; Ctrl-F hides files.",
+            }
+            .to_owned()
+        });
+        None
+    }
+
+    /// Visibility for the next-directory pane (its contents have their own names).
+    pub fn preview_visible(&self, entry: &Entry) -> bool {
+        (self.show_hidden || !entry.hidden) && (!self.dirs_only || entry.is_dir())
     }
 
     pub fn cached(&mut self, path: &Path) -> Option<Arc<Listing>> {
@@ -182,6 +224,7 @@ impl Model {
         } else {
             self.listing = None;
             self.visible.clear();
+            self.counts = Counts::default();
             self.selected = 0;
         }
         self.loading = false;
@@ -212,6 +255,14 @@ impl Model {
         let selected = self.selected_path();
         self.show_hidden = !self.show_hidden;
         self.rebuild(selected);
+        self.message = None;
+    }
+
+    pub fn toggle_files(&mut self) {
+        let selected = self.selected_path();
+        self.dirs_only = !self.dirs_only;
+        self.rebuild(selected);
+        self.message = None;
     }
 
     pub fn push_query(&mut self, text: &str) {
@@ -237,16 +288,20 @@ impl Model {
 
     fn rebuild(&mut self, preferred: Option<PathBuf>) {
         self.visible.clear();
+        self.counts = Counts::default();
         if let Some(listing) = &self.listing {
             let query = self.query.to_lowercase();
             let reveal_hidden = self.show_hidden || query.starts_with('.');
+            let allowed = |entry: &Entry| {
+                (reveal_hidden || !entry.hidden) && (!self.dirs_only || entry.is_dir())
+            };
             if query.is_empty() {
                 self.visible.extend(
                     listing
                         .entries
                         .iter()
                         .enumerate()
-                        .filter(|(_, entry)| reveal_hidden || !entry.hidden)
+                        .filter(|(_, entry)| allowed(entry))
                         .map(|(index, _)| index),
                 );
             } else {
@@ -254,14 +309,22 @@ impl Model {
                     .entries
                     .iter()
                     .enumerate()
-                    .filter(|(_, entry)| reveal_hidden || !entry.hidden)
+                    .filter(|(_, entry)| allowed(entry))
                     .filter_map(|(index, entry)| {
-                        filter::score(&entry.folded, &query).map(|score| (score, index))
+                        filter::score(&entry.folded, &query)
+                            .map(|score| (!entry.is_dir(), score, index))
                     })
                     .collect();
                 ranked.sort_unstable();
                 self.visible
-                    .extend(ranked.into_iter().map(|(_, index)| index));
+                    .extend(ranked.into_iter().map(|(_, _, index)| index));
+            }
+            for &index in &self.visible {
+                match listing.entries[index].kind {
+                    EntryKind::Directory => self.counts.folders += 1,
+                    EntryKind::File(_) => self.counts.files += 1,
+                    _ => self.counts.other += 1,
+                }
             }
             self.selected = preferred
                 .and_then(|path| {
@@ -310,6 +373,107 @@ mod tests {
         let mut model = Model::new(root.clone(), false);
         model.complete_navigation(listing(&root, &[".git", "app", "notes", "tools"]));
         model
+    }
+
+    fn mixed_model() -> Model {
+        let mut model = Model::new(PathBuf::from("/code"), false);
+        model.complete_navigation(Arc::new(Listing {
+            entries: vec![
+                Entry::new(PathBuf::from("/code/src"), false),
+                Entry::file(PathBuf::from("/code/.env"), false),
+                Entry::file(PathBuf::from("/code/main.rs"), false),
+                Entry::file(PathBuf::from("/code/README.md"), false),
+            ],
+            skipped: 0,
+        }));
+        model
+    }
+
+    #[test]
+    fn files_are_visible_filterable_and_never_navigation_targets() {
+        let mut model = mixed_model();
+        assert_eq!(
+            model.counts,
+            Counts {
+                folders: 1,
+                files: 2,
+                other: 0
+            }
+        );
+        model.push_query("mnrs");
+        assert_eq!(model.selected_entry().unwrap().label, "main.rs");
+        assert!(model.selected_directory().is_none());
+        assert!(model.directory_target().is_none());
+        assert!(model.message.as_deref().unwrap().contains("File selected"));
+        assert_eq!(model.cwd, Path::new("/code"));
+        assert_eq!(model.counts.files, 1);
+    }
+
+    #[test]
+    fn toggling_files_preserves_directory_selection_and_the_filter() {
+        let mut model = mixed_model();
+        let selected = model.selected_path();
+        model.toggle_files();
+        assert_eq!(model.selected_path(), selected);
+        assert_eq!(
+            model.counts,
+            Counts {
+                folders: 1,
+                files: 0,
+                other: 0
+            }
+        );
+        model.push_query("main");
+        assert!(model.visible.is_empty());
+        model.toggle_files();
+        assert_eq!(model.query, "main");
+        assert_eq!(model.selected_entry().unwrap().label, "main.rs");
+        model.clear_query();
+        model.toggle_files();
+        assert!(model.selected_entry().unwrap().is_dir());
+        assert_eq!(model.selected, 0);
+    }
+
+    #[test]
+    fn hidden_files_follow_visibility_without_extra_scans() {
+        let mut model = mixed_model();
+        model.toggle_hidden();
+        assert_eq!(model.counts.files, 3);
+        model.toggle_hidden();
+        model.push_query(".e");
+        assert_eq!(model.selected_entry().unwrap().label, ".env");
+        model.toggle_files();
+        assert!(model.visible.is_empty());
+    }
+
+    #[test]
+    fn matching_directories_still_precede_exact_file_matches() {
+        let mut model = mixed_model();
+        model.listing = Some(Arc::new(Listing {
+            entries: vec![
+                Entry::new(PathBuf::from("/code/rust-source"), false),
+                Entry::file(PathBuf::from("/code/rs"), false),
+            ],
+            skipped: 0,
+        }));
+        model.push_query("rs");
+        assert!(model.selected_entry().unwrap().is_dir());
+        assert_eq!(model.visible.len(), 2);
+    }
+
+    #[test]
+    fn file_only_listing_is_not_an_empty_directory() {
+        let mut model = Model::new(PathBuf::from("/code"), false);
+        model.complete_navigation(Arc::new(Listing {
+            entries: vec![Entry::file(PathBuf::from("/code/a.txt"), false)],
+            skipped: 0,
+        }));
+        assert_eq!(model.counts.files, 1);
+        assert_eq!(model.visible.len(), 1);
+        model.toggle_files();
+        assert!(model.visible.is_empty());
+        model.move_selection(1);
+        assert_eq!(model.viewport(5), 0..0);
     }
 
     #[test]

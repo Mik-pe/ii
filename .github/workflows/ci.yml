@@ -29,6 +29,11 @@ jobs:
         run: cargo test --locked --all-targets
       - name: Clippy
         run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Verify README UI snapshot
+        if: runner.os == 'Linux'
+        run: |
+          cargo run --locked --example render_demo > "$RUNNER_TEMP/ii-demo.svg"
+          cmp "$RUNNER_TEMP/ii-demo.svg" docs/assets/demo.svg
       - name: Build
         run: cargo build --locked --release
       - name: Real terminal integration

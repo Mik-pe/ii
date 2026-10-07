@@ -1,5 +1,5 @@
-//! Single-level directory scans and latest-request-wins workers.
-//! Navigation and previews use independent workers: a slow preview cannot block navigation.
+//! Single-level scans and latest-request-wins workers.
+//! Entry classification never reads file contents or executes a program.
 
 use std::fs;
 use std::io;
@@ -10,6 +10,85 @@ use std::thread;
 
 use crate::filter::safe_label;
 
+/// A visual hint inferred from the name, not a claim about the file's contents.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FileKind {
+    Code,
+    Config,
+    Document,
+    Media,
+    Archive,
+    Other,
+}
+
+impl FileKind {
+    pub fn from_path(path: &Path) -> Self {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        let name = name.to_ascii_lowercase();
+        if matches!(
+            name.as_str(),
+            "dockerfile" | "makefile" | "justfile" | "gemfile" | "rakefile"
+        ) {
+            return Self::Code;
+        }
+        if matches!(
+            name.as_str(),
+            ".gitignore" | ".gitattributes" | ".editorconfig" | ".npmrc" | ".env"
+        ) || name.starts_with(".env.")
+        {
+            return Self::Config;
+        }
+        if matches!(
+            name.as_str(),
+            "readme" | "license" | "licence" | "copying" | "changelog" | "authors"
+        ) {
+            return Self::Document;
+        }
+        let extension = path
+            .extension()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_ascii_lowercase();
+        match extension.as_str() {
+            "rs" | "py" | "js" | "jsx" | "ts" | "tsx" | "mjs" | "cjs" | "go" | "c" | "h" | "cc"
+            | "cpp" | "hpp" | "cs" | "java" | "kt" | "swift" | "rb" | "php" | "lua" | "sh"
+            | "bash" | "zsh" | "fish" | "ps1" | "bat" | "cmd" | "html" | "css" | "scss" | "vue"
+            | "svelte" | "sql" | "zig" | "ex" | "exs" => Self::Code,
+            "toml" | "json" | "jsonc" | "yaml" | "yml" | "ini" | "cfg" | "conf" | "xml"
+            | "lock" | "env" | "properties" => Self::Config,
+            "md" | "mdx" | "txt" | "rst" | "adoc" | "pdf" | "doc" | "docx" | "odt" | "csv"
+            | "tsv" | "xls" | "xlsx" | "ppt" | "pptx" => Self::Document,
+            "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "avif" | "ico" | "bmp" | "tiff"
+            | "mp3" | "wav" | "flac" | "ogg" | "m4a" | "mp4" | "mkv" | "mov" | "webm" => {
+                Self::Media
+            }
+            "zip" | "tar" | "gz" | "bz2" | "xz" | "zst" | "7z" | "rar" | "tgz" => Self::Archive,
+            _ => Self::Other,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Code => "code",
+            Self::Config => "config",
+            Self::Document => "document",
+            Self::Media => "media",
+            Self::Archive => "archive",
+            Self::Other => "file",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EntryKind {
+    Directory,
+    File(FileKind),
+    /// Includes broken links and links whose target cannot be inspected.
+    UnresolvedLink,
+    /// Sockets, FIFOs, devices, and other non-regular entries. Never opened.
+    Special,
+}
+
 #[derive(Clone, Debug)]
 pub struct Entry {
     pub path: PathBuf,
@@ -17,10 +96,21 @@ pub struct Entry {
     pub folded: String,
     pub hidden: bool,
     pub symlink: bool,
+    pub kind: EntryKind,
 }
 
 impl Entry {
+    /// Construct a directory entry. This also keeps model fixtures concise.
     pub fn new(path: PathBuf, symlink: bool) -> Self {
+        Self::with_kind(path, symlink, EntryKind::Directory)
+    }
+
+    pub fn file(path: PathBuf, symlink: bool) -> Self {
+        let kind = FileKind::from_path(&path);
+        Self::with_kind(path, symlink, EntryKind::File(kind))
+    }
+
+    pub fn with_kind(path: PathBuf, symlink: bool, kind: EntryKind) -> Self {
         let name = path
             .file_name()
             .unwrap_or(path.as_os_str())
@@ -34,6 +124,30 @@ impl Entry {
             folded,
             hidden,
             symlink,
+            kind,
+        }
+    }
+
+    pub fn is_dir(&self) -> bool {
+        self.kind == EntryKind::Directory
+    }
+
+    pub fn type_label(&self) -> &'static str {
+        match self.kind {
+            EntryKind::Directory => "folder",
+            EntryKind::File(kind) => kind.label(),
+            EntryKind::UnresolvedLink => "unresolved link",
+            EntryKind::Special => "special",
+        }
+    }
+
+    pub fn suffix(&self) -> &'static str {
+        match (self.kind, self.symlink) {
+            (EntryKind::Directory, false) => "/",
+            (EntryKind::Directory, true) => "/ ↗",
+            (EntryKind::UnresolvedLink, _) => " ↗!",
+            (_, true) => " ↗",
+            _ => "",
         }
     }
 }
@@ -44,7 +158,7 @@ pub struct Listing {
     pub skipped: usize,
 }
 
-/// Scan exactly one directory. Regular files are not stat-ed or displayed.
+/// Scan exactly one directory. Ordinary files need no extra metadata calls.
 pub fn scan(path: &Path) -> io::Result<Listing> {
     scan_cancellable(path, || false).unwrap_or_else(|| Ok(Listing::default()))
 }
@@ -73,25 +187,33 @@ fn scan_cancellable(path: &Path, cancelled: impl Fn() -> bool) -> Option<io::Res
                 continue;
             }
         };
-        if kind.is_dir() {
-            listing.entries.push(Entry::new(item.path(), false));
-        } else if kind.is_symlink() {
-            // Only symlinks need metadata; never recursively follow them.
-            match fs::metadata(item.path()) {
-                Ok(metadata) if metadata.is_dir() => {
-                    listing.entries.push(Entry::new(item.path(), true))
-                }
-                Ok(_) => {}
-                Err(_) => listing.skipped += 1,
+        let path = item.path();
+        let entry = if kind.is_symlink() {
+            // Inspect a link's target type only, retaining its original alias path.
+            match fs::metadata(&path) {
+                Ok(metadata) if metadata.is_dir() => Entry::new(path, true),
+                Ok(metadata) if metadata.is_file() => Entry::file(path, true),
+                Ok(_) => Entry::with_kind(path, true, EntryKind::Special),
+                Err(_) => Entry::with_kind(path, true, EntryKind::UnresolvedLink),
             }
-        }
+        } else if kind.is_dir() {
+            Entry::new(path, false)
+        } else if kind.is_file() {
+            Entry::file(path, false)
+        } else {
+            Entry::with_kind(path, false, EntryKind::Special)
+        };
+        listing.entries.push(entry);
     }
     if cancelled() {
         return None;
     }
-    listing
-        .entries
-        .sort_unstable_by(|a, b| a.folded.cmp(&b.folded).then_with(|| a.path.cmp(&b.path)));
+    listing.entries.sort_unstable_by(|a, b| {
+        (!a.is_dir())
+            .cmp(&!b.is_dir())
+            .then_with(|| a.folded.cmp(&b.folded))
+            .then_with(|| a.path.cmp(&b.path))
+    });
     Some(Ok(listing))
 }
 
@@ -194,8 +316,7 @@ impl Drop for Scanner {
         self.cancel();
         lock(&self.shared.pending).closed = true;
         self.shared.wake.notify_one();
-        // Do not join a thread blocked inside an OS/network filesystem call.
-        // Process exit must remain immediate; no writes are performed by workers.
+        // Never join a worker blocked inside an OS/network filesystem call.
     }
 }
 
@@ -205,21 +326,48 @@ mod tests {
     use std::time::{Duration, Instant};
 
     #[test]
-    fn scans_only_directories_and_keeps_hidden_entries() {
+    fn scans_files_and_directories_with_directories_first() {
         let root = tempfile::tempdir().unwrap();
         for name in ["zebra", "Alpha", ".hidden"] {
             fs::create_dir(root.path().join(name)).unwrap();
         }
-        fs::write(root.path().join("not-a-directory"), "").unwrap();
+        for name in ["README.md", "a.rs", ".env"] {
+            fs::write(root.path().join(name), "").unwrap();
+        }
         let listing = scan(root.path()).unwrap();
         let names: Vec<_> = listing
             .entries
             .iter()
             .map(|entry| entry.label.as_str())
             .collect();
-        assert_eq!(names, [".hidden", "Alpha", "zebra"]);
+        assert_eq!(
+            names,
+            [".hidden", "Alpha", "zebra", ".env", "a.rs", "README.md"]
+        );
         assert!(listing.entries[0].hidden);
+        assert!(listing.entries[..3].iter().all(Entry::is_dir));
+        assert_eq!(listing.entries[4].kind, EntryKind::File(FileKind::Code));
         assert_eq!(listing.skipped, 0);
+    }
+
+    #[test]
+    fn classification_is_case_insensitive_and_does_not_require_a_file() {
+        for (name, kind) in [
+            ("MAIN.RS", FileKind::Code),
+            ("Dockerfile", FileKind::Code),
+            ("justfile", FileKind::Code),
+            ("Cargo.toml", FileKind::Config),
+            (".env.local", FileKind::Config),
+            (".gitignore", FileKind::Config),
+            ("README", FileKind::Document),
+            ("notes.md", FileKind::Document),
+            ("cover.WEBP", FileKind::Media),
+            ("backup.tar.gz", FileKind::Archive),
+            ("unknown", FileKind::Other),
+            ("README.rs", FileKind::Code),
+        ] {
+            assert_eq!(FileKind::from_path(Path::new(name)), kind, "{name}");
+        }
     }
 
     #[test]
@@ -251,22 +399,42 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn follows_directory_symlinks_without_recursing_or_rewriting_paths() {
+    fn keeps_directory_file_and_unresolved_symlinks_without_recursing() {
         use std::os::unix::fs::symlink;
         let root = tempfile::tempdir().unwrap();
         fs::create_dir(root.path().join("real")).unwrap();
+        fs::write(root.path().join("file.txt"), "").unwrap();
         symlink(root.path().join("real"), root.path().join("alias")).unwrap();
+        symlink(root.path().join("file.txt"), root.path().join("linked.txt")).unwrap();
         symlink(root.path().join("missing"), root.path().join("broken")).unwrap();
         let listing = scan(root.path()).unwrap();
-        let alias = listing
-            .entries
-            .iter()
-            .find(|entry| entry.label == "alias")
-            .unwrap();
-        assert!(alias.symlink);
-        assert_eq!(alias.path, root.path().join("alias"));
-        assert_eq!(listing.entries.len(), 2);
-        assert_eq!(listing.skipped, 1);
+        let find = |label: &str| {
+            listing
+                .entries
+                .iter()
+                .find(|entry| entry.label == label)
+                .unwrap()
+        };
+        assert!(find("alias").is_dir());
+        assert!(find("alias").symlink);
+        assert_eq!(find("alias").path, root.path().join("alias"));
+        assert_eq!(find("linked.txt").kind, EntryKind::File(FileKind::Document));
+        assert!(find("linked.txt").symlink);
+        assert_eq!(find("broken").kind, EntryKind::UnresolvedLink);
+        assert_eq!(find("broken").suffix(), " ↗!");
+        assert_eq!(listing.entries.len(), 5);
+        assert_eq!(listing.skipped, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sockets_are_classified_without_opening_them() {
+        use std::os::unix::net::UnixListener;
+        let root = tempfile::tempdir().unwrap();
+        let _listener = UnixListener::bind(root.path().join("socket")).unwrap();
+        let listing = scan(root.path()).unwrap();
+        assert_eq!(listing.entries[0].kind, EntryKind::Special);
+        assert!(!listing.entries[0].is_dir());
     }
 
     #[cfg(unix)]
@@ -275,22 +443,28 @@ mod tests {
         use std::ffi::OsString;
         use std::os::unix::ffi::OsStringExt;
         let path = PathBuf::from(OsString::from_vec(vec![b'a', 0xff]));
-        let entry = Entry::new(path.clone(), false);
-        assert_eq!(entry.path, path);
-        assert!(entry.label.contains('\u{fffd}'));
+        for entry in [
+            Entry::new(path.clone(), false),
+            Entry::file(path.clone(), false),
+        ] {
+            assert_eq!(entry.path, path);
+            assert!(entry.label.contains('\u{fffd}'));
+        }
     }
 
-    // Linux's native test filesystem accepts arbitrary filename bytes. APFS
-    // rejects malformed UTF-8 at creation; the pure invariant is tested above
-    // on every Unix platform without pretending such a file can be created.
+    // APFS rejects malformed UTF-8; the pure path invariant above runs on all Unix.
     #[cfg(target_os = "linux")]
     #[test]
-    fn scans_non_utf8_directory_names() {
+    fn scans_non_utf8_directory_and_file_names() {
         use std::ffi::OsString;
         use std::os::unix::ffi::OsStringExt;
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join(OsString::from_vec(vec![b'a', 0xff]));
-        fs::create_dir(&path).unwrap();
-        assert_eq!(scan(root.path()).unwrap().entries[0].path, path);
+        let directory = root.path().join(OsString::from_vec(vec![b'd', 0xff]));
+        let file = root.path().join(OsString::from_vec(vec![b'f', 0xff]));
+        fs::create_dir(&directory).unwrap();
+        fs::write(&file, []).unwrap();
+        let listing = scan(root.path()).unwrap();
+        assert_eq!(listing.entries[0].path, directory);
+        assert_eq!(listing.entries[1].path, file);
     }
 }

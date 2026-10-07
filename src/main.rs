@@ -1,11 +1,3 @@
-use std::env;
-use std::ffi::OsString;
-use std::io::{self, IsTerminal, Write};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
-
 use crossterm::cursor::{Hide, Show};
 use crossterm::event::{
     self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind,
@@ -16,19 +8,26 @@ use crossterm::style::ResetColor;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use ratatui::{Terminal, backend::CrosstermBackend};
-
 use ii::filesystem::Scanner;
 use ii::filter::safe_label;
 use ii::model::Model;
 use ii::ui::{self, Theme};
+use ratatui::{Terminal, backend::CrosstermBackend};
+use std::env;
+use std::ffi::OsString;
+use std::io::{self, IsTerminal, Write};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
-const HELP: &str = "ii — two taps, any directory\n\nUSAGE\n    ii [OPTIONS] [PATH]\n    ii init <bash|zsh|fish|powershell>\n\nOPTIONS\n    -a, --hidden       Show hidden directories\n        --no-preview   Use a single directory pane\n        --no-color     Use your terminal colors (also honors NO_COLOR)\n        --print0       Terminate the selected path with NUL (for scripts)\n    -h, --help         Print this help\n    -V, --version      Print the version\n        --             Treat the remaining argument as a path\n\nKEYS\n    ↑↓ select   → open   ← parent   Enter cd here   Tab cd selected\n    Type to filter. Esc clears the filter, then cancels. Ctrl-C always cancels.\n    . toggles hidden folders. Ctrl-L refreshes. ? opens help.\n\nSHELL SETUP (once in your shell profile)\n    bash:       eval \"$(ii init bash)\"\n    zsh:        eval \"$(ii init zsh)\"\n    fish:       ii init fish | source\n    PowerShell: ii.exe init powershell | Out-String | Invoke-Expression\n\nPowerShell setup replaces the built-in ii alias for Invoke-Item.\nThe UI uses stderr. A successful selection writes only the raw absolute path\n(with no trailing newline) to stdout. Cancellation exits 130 with no path.\nA subprocess cannot change its parent directory: install the shell function.\n";
+const HELP: &str = "ii — two taps, any directory\n\nUSAGE\n    ii [OPTIONS] [PATH]\n    ii init <bash|zsh|fish|powershell>\n\nOPTIONS\n    -a, --hidden       Show hidden entries\n        --dirs-only    Start with files hidden (Ctrl-F toggles)\n        --no-preview   Use a single directory pane\n        --no-color     Use your terminal colors (also honors NO_COLOR)\n        --print0       Terminate the selected path with NUL (for scripts)\n    -h, --help         Print this help\n    -V, --version      Print the version\n        --             Treat the remaining argument as a path\n\nKEYS\n    ↑↓ select   → open folder   ← parent   Enter cd here   Tab cd selected folder\n    Type to filter folders and files. Ctrl-F shows/hides files.\n    Files have name-based colors and type labels; they are never opened or executed.\n    Esc clears the filter, then cancels. Ctrl-C always cancels.\n    . toggles hidden entries. Ctrl-L refreshes. ? opens help.\n\nSHELL SETUP (once in your shell profile)\n    bash:       eval \"$(ii init bash)\"\n    zsh:        eval \"$(ii init zsh)\"\n    fish:       ii init fish | source\n    PowerShell: ii.exe init powershell | Out-String | Invoke-Expression\n\nPowerShell setup replaces the built-in ii alias for Invoke-Item.\nThe UI uses stderr. A successful selection writes only the raw absolute path\n(with no trailing newline) to stdout. Cancellation exits 130 with no path.\nA subprocess cannot change its parent directory: install the shell function.\n";
 
 #[derive(Default)]
 struct Options {
     path: Option<PathBuf>,
     hidden: bool,
+    dirs_only: bool,
     no_preview: bool,
     no_color: bool,
     print0: bool,
@@ -77,6 +76,10 @@ fn parse(arguments: impl IntoIterator<Item = OsString>) -> Result<Command, Strin
                     options.hidden = true;
                     continue;
                 }
+                Some("--dirs-only") => {
+                    options.dirs_only = true;
+                    continue;
+                }
                 Some("--no-preview") => {
                     options.no_preview = true;
                     continue;
@@ -118,7 +121,6 @@ fn restore_terminal() {
 }
 
 struct Session;
-
 impl Session {
     fn start() -> io::Result<Self> {
         let previous = std::panic::take_hook();
@@ -138,7 +140,6 @@ impl Session {
         Ok(session)
     }
 }
-
 impl Drop for Session {
     fn drop(&mut self) {
         restore_terminal();
@@ -150,7 +151,6 @@ enum Finish {
     Current,
     Selected,
 }
-
 enum Intent {
     None,
     Navigate(PathBuf, Option<PathBuf>),
@@ -168,9 +168,22 @@ fn key_intent(model: &mut Model, key: KeyEvent, page: isize, home: Option<&Path>
     if key.kind == KeyEventKind::Release {
         return Intent::None;
     }
+    if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c' | 'd'))
+    {
+        return Intent::Cancel;
+    }
+    if model.help {
+        if matches!(key.code, KeyCode::Esc | KeyCode::F(1) | KeyCode::Char('?')) {
+            model.help = false;
+        }
+        return Intent::None;
+    }
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         return match key.code {
-            KeyCode::Char('c' | 'd') => Intent::Cancel,
+            KeyCode::Char('f') => {
+                model.toggle_files();
+                Intent::None
+            }
             KeyCode::Char('u') => {
                 model.clear_query();
                 Intent::None
@@ -190,12 +203,6 @@ fn key_intent(model: &mut Model, key: KeyEvent, page: isize, home: Option<&Path>
             _ => Intent::None,
         };
     }
-    if model.help {
-        if matches!(key.code, KeyCode::Esc | KeyCode::F(1) | KeyCode::Char('?')) {
-            model.help = false;
-        }
-        return Intent::None;
-    }
     match key.code {
         KeyCode::Up => model.move_selection(-1),
         KeyCode::Down => model.move_selection(1),
@@ -206,7 +213,7 @@ fn key_intent(model: &mut Model, key: KeyEvent, page: isize, home: Option<&Path>
         KeyCode::Left => return parent(model),
         KeyCode::Right => {
             return model
-                .selected_path()
+                .directory_target()
                 .map_or(Intent::None, |path| Intent::Navigate(path, None));
         }
         KeyCode::Backspace if model.query.is_empty() => return parent(model),
@@ -265,6 +272,7 @@ fn run(options: &Options) -> io::Result<Option<PathBuf>> {
     let _session = Session::start()?;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stderr()))?;
     let mut model = Model::new(start, options.hidden);
+    model.dirs_only = options.dirs_only;
     let mut navigation_id = navigation.request(model.cwd.clone());
     let mut preview_id = None;
     let mut preview_deadline: Option<Instant> = None;
@@ -292,27 +300,26 @@ fn run(options: &Options) -> io::Result<Option<PathBuf>> {
             }
             dirty = true;
         }
-        // Remember Enter during a scan instead of making the user press it again.
+        // Remember Enter/Tab during a scan, but never allow a file as a cd target.
         if !model.loading
             && let Some(request) = finish.take()
         {
             match request {
                 Finish::Current if model.listing.is_some() => return Ok(Some(model.cwd)),
                 Finish::Selected => {
-                    if let Some(path) = model.selected_path() {
+                    if let Some(path) = model.directory_target() {
                         model.begin_navigation(path.clone(), None);
                         navigation_id = navigation.request(path);
                         finish = Some(Finish::Current);
-                        dirty = true;
                     }
+                    dirty = true;
                 }
                 _ => {}
             }
         }
-
         let preview_enabled = !options.no_preview && size.width >= 90;
         let desired = if preview_enabled && !model.loading {
-            model.selected_path()
+            model.selected_directory()
         } else {
             None
         };
@@ -450,18 +457,21 @@ fn main() -> std::process::ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ii::filesystem::{Entry, Listing};
 
     #[test]
     fn parsing_is_strict_but_accepts_dash_paths_after_separator() {
         assert!(parse(["--wat"].map(OsString::from)).is_err());
         assert!(parse(["a", "b"].map(OsString::from)).is_err());
         assert!(parse(["init", "nonsense"].map(OsString::from)).is_err());
-        let Command::Run(options) = parse(["--hidden", "--", "-folder"].map(OsString::from))
-            .unwrap_or_else(|_| panic!("parse failed"))
+        let Command::Run(options) =
+            parse(["--hidden", "--dirs-only", "--", "-folder"].map(OsString::from))
+                .unwrap_or_else(|_| panic!("parse failed"))
         else {
             panic!("not run")
         };
         assert!(options.hidden);
+        assert!(options.dirs_only);
         assert_eq!(options.path.unwrap(), PathBuf::from("-folder"));
     }
 
@@ -493,5 +503,51 @@ mod tests {
             key_intent(&mut model, key(KeyCode::Esc), 10, None),
             Intent::Cancel
         ));
+    }
+
+    #[test]
+    fn right_never_navigates_into_a_file_and_enter_still_finishes_here() {
+        let mut model = Model::new(PathBuf::from("/code"), false);
+        model.complete_navigation(Arc::new(Listing {
+            entries: vec![Entry::file(PathBuf::from("/code/main.rs"), false)],
+            skipped: 0,
+        }));
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        assert!(matches!(
+            key_intent(&mut model, key(KeyCode::Right), 10, None),
+            Intent::None
+        ));
+        assert!(model.message.as_deref().unwrap().contains("File selected"));
+        assert!(matches!(
+            key_intent(&mut model, key(KeyCode::Enter), 10, None),
+            Intent::Finish(Finish::Current)
+        ));
+    }
+
+    #[test]
+    fn ctrl_f_toggles_files_but_an_ordinary_f_filters_and_help_is_modal() {
+        let mut model = Model::new(PathBuf::from("/code"), false);
+        key_intent(
+            &mut model,
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL),
+            10,
+            None,
+        );
+        assert!(model.dirs_only);
+        key_intent(
+            &mut model,
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE),
+            10,
+            None,
+        );
+        assert_eq!(model.query, "f");
+        model.help = true;
+        key_intent(
+            &mut model,
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL),
+            10,
+            None,
+        );
+        assert!(model.dirs_only);
     }
 }

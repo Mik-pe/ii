@@ -8,7 +8,7 @@ use ratatui::widgets::{Block, BorderType, Clear, List, ListItem, ListState, Para
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use crate::filesystem::Entry;
+use crate::filesystem::{Entry, EntryKind, FileKind};
 use crate::filter::safe_label;
 use crate::model::Model;
 
@@ -19,6 +19,7 @@ pub struct Theme {
     pub selected: Style,
     pub warning: Style,
     pub border: Style,
+    no_color: bool,
 }
 
 impl Theme {
@@ -30,6 +31,7 @@ impl Theme {
                 selected: Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD),
                 warning: Style::default().add_modifier(Modifier::BOLD),
                 border: Style::default(),
+                no_color,
             }
         } else {
             Self {
@@ -43,8 +45,28 @@ impl Theme {
                     .add_modifier(Modifier::BOLD),
                 warning: Style::default().fg(Color::Rgb(244, 188, 111)),
                 border: Style::default().fg(Color::Rgb(73, 96, 101)),
+                no_color,
             }
         }
+    }
+
+    pub fn entry_style(self, entry: &Entry) -> Style {
+        if entry.is_dir() {
+            return self.accent;
+        }
+        if self.no_color {
+            return Style::default();
+        }
+        let color = match entry.kind {
+            EntryKind::File(FileKind::Code) => Color::Rgb(137, 180, 250),
+            EntryKind::File(FileKind::Config) => Color::Rgb(232, 198, 122),
+            EntryKind::File(FileKind::Document) => Color::Rgb(203, 213, 225),
+            EntryKind::File(FileKind::Media) => Color::Rgb(211, 166, 235),
+            EntryKind::File(FileKind::Archive) => Color::Rgb(235, 168, 107),
+            EntryKind::UnresolvedLink => Color::Rgb(243, 139, 168),
+            _ => Color::Rgb(160, 173, 185),
+        };
+        Style::default().fg(color)
     }
 }
 
@@ -52,7 +74,7 @@ fn vertical_spacing(height: u16) -> u16 {
     if height < 16 { 1 } else { 2 }
 }
 
-/// Actual directory-row count, shared with PageUp/PageDown input dispatch.
+/// Actual list-row count, shared with PageUp/PageDown input dispatch.
 pub fn page_size(height: u16) -> u16 {
     height
         .saturating_sub(2)
@@ -82,24 +104,71 @@ pub fn tail(input: &str, width: usize) -> String {
     format!("…{}", &input[start..])
 }
 
-fn row(entry: &Entry, query: &str, theme: Theme) -> Line<'static> {
-    let mut wanted = query.chars().flat_map(char::to_lowercase).peekable();
-    let mut spans = Vec::with_capacity(entry.label.len().min(64) + 2);
-    for ch in entry.label.chars() {
-        let matches = wanted
-            .peek()
-            .is_some_and(|next| ch.to_lowercase().any(|candidate| candidate == *next));
-        if matches {
-            wanted.next();
-            spans.push(Span::styled(ch.to_string(), theme.accent));
-        } else {
-            spans.push(Span::raw(ch.to_string()));
+/// Preserve both a filename's prefix and its extension when space is tight.
+fn middle(input: &str, width: usize) -> String {
+    if UnicodeWidthStr::width(input) <= width {
+        return input.to_owned();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let budget = (width - 1) * 2 / 3;
+    let mut prefix = String::new();
+    let mut used = 0;
+    for grapheme in input.graphemes(true) {
+        let cells = UnicodeWidthStr::width(grapheme);
+        if used + cells > budget {
+            break;
+        }
+        prefix.push_str(grapheme);
+        used += cells;
+    }
+    prefix.push_str(&tail(input, width - used));
+    prefix
+}
+
+fn row(entry: &Entry, query: &str, theme: Theme, width: usize) -> Line<'static> {
+    let style = theme.entry_style(entry);
+    let badge = if width >= 34 && !entry.is_dir() {
+        entry.type_label()
+    } else {
+        ""
+    };
+    let badge_width = UnicodeWidthStr::width(badge);
+    let suffix = entry.suffix();
+    let label_width = width.saturating_sub(
+        UnicodeWidthStr::width(suffix) + badge_width + if badge.is_empty() { 0 } else { 2 },
+    );
+    let label = middle(&entry.label, label_width);
+    let used = UnicodeWidthStr::width(label.as_str()) + UnicodeWidthStr::width(suffix);
+    let mut spans = Vec::new();
+    if query.is_empty() {
+        // The hot arrow-key path allocates a handful of spans, not one per character.
+        spans.push(Span::styled(label, style));
+    } else {
+        let mut wanted = query.chars().flat_map(char::to_lowercase).peekable();
+        for ch in label.chars() {
+            let matched = wanted
+                .peek()
+                .is_some_and(|next| ch.to_lowercase().any(|candidate| candidate == *next));
+            if matched {
+                wanted.next();
+            }
+            let style = if matched {
+                style.add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+            } else {
+                style
+            };
+            spans.push(Span::styled(ch.to_string(), style));
         }
     }
-    spans.push(Span::styled(
-        if entry.symlink { "/ ↗" } else { "/" },
-        theme.muted,
-    ));
+    spans.push(Span::styled(suffix, style));
+    if !badge.is_empty() {
+        spans.push(Span::raw(
+            " ".repeat(width.saturating_sub(used + badge_width)),
+        ));
+        spans.push(Span::styled(badge, style));
+    }
     Line::from(spans)
 }
 
@@ -125,7 +194,6 @@ pub fn draw(frame: &mut Frame<'_>, model: &mut Model, theme: Theme, preview_enab
         Constraint::Length(spacing),
     ])
     .areas(body);
-
     let path = tail(
         &safe_label(&model.cwd.to_string_lossy()),
         header.width.saturating_sub(8) as usize,
@@ -151,7 +219,7 @@ pub fn draw(frame: &mut Frame<'_>, model: &mut Model, theme: Theme, preview_enab
         search,
     );
 
-    let (folders, preview) = if preview_enabled && area.width >= 90 {
+    let (entries, preview) = if preview_enabled && area.width >= 90 {
         let [left, right] =
             Layout::horizontal([Constraint::Percentage(56), Constraint::Percentage(44)])
                 .areas(content);
@@ -162,22 +230,28 @@ pub fn draw(frame: &mut Frame<'_>, model: &mut Model, theme: Theme, preview_enab
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(theme.border)
-        .title(" FOLDERS ");
-    let inner = block.inner(folders);
+        .title(if model.dirs_only {
+            " FOLDERS "
+        } else {
+            " CONTENTS "
+        });
+    let inner = block.inner(entries);
     let range = model.viewport(inner.height as usize);
     if model.visible.is_empty() {
         let message = if model.loading {
             "Reading directory…"
         } else if !model.query.is_empty() {
-            "No matching folders. Esc clears the filter."
+            "No matches. Esc clears the filter."
         } else if model.listing.is_none() {
             "Cannot read this directory. ← goes up."
+        } else if model.dirs_only {
+            "No folders. Ctrl-F shows files; Enter stays here."
         } else {
-            "No folders here. Enter stays here; ← goes up."
+            "No visible entries. Enter stays here; . shows hidden."
         };
         frame.render_widget(
             Paragraph::new(message).style(theme.muted).block(block),
-            folders,
+            entries,
         );
     } else if let Some(listing) = &model.listing {
         let rows: Vec<_> = range
@@ -187,6 +261,7 @@ pub fn draw(frame: &mut Frame<'_>, model: &mut Model, theme: Theme, preview_enab
                     &listing.entries[model.visible[index]],
                     &model.query,
                     theme,
+                    inner.width.saturating_sub(2) as usize,
                 ))
             })
             .collect();
@@ -196,7 +271,7 @@ pub fn draw(frame: &mut Frame<'_>, model: &mut Model, theme: Theme, preview_enab
                 .block(block)
                 .highlight_symbol("› ")
                 .highlight_style(theme.selected),
-            folders,
+            entries,
             &mut state,
         );
     }
@@ -209,29 +284,42 @@ pub fn draw(frame: &mut Frame<'_>, model: &mut Model, theme: Theme, preview_enab
     } else if model.loading {
         Line::styled("Reading directory…  Esc cancels", theme.muted)
     } else {
-        let skipped = model.listing.as_ref().map_or(0, |listing| listing.skipped);
+        let selected = if model.visible.is_empty() {
+            0
+        } else {
+            model.selected + 1
+        };
         let mut text = format!(
-            "{} / {} folders",
-            if model.visible.is_empty() {
-                0
-            } else {
-                model.selected + 1
-            },
-            model.visible.len()
+            "{selected}/{}   {} folders · {} files",
+            model.visible.len(),
+            model.counts.folders,
+            model.counts.files
         );
-        if model.show_hidden {
-            text.push_str("   · hidden on");
+        if model.counts.other > 0 {
+            text.push_str(&format!(" · {} other", model.counts.other));
         }
+        if model.dirs_only {
+            text.push_str(" · files hidden");
+        }
+        if model.show_hidden {
+            text.push_str(" · hidden on");
+        }
+        let skipped = model.listing.as_ref().map_or(0, |listing| listing.skipped);
         if skipped > 0 {
-            text.push_str(&format!("   · {skipped} unreadable entries skipped"));
+            text.push_str(&format!(" · {skipped} unreadable entries skipped"));
         }
         Line::styled(text, theme.muted)
     };
     frame.render_widget(Paragraph::new(text), status);
-    let hints = if keys.width >= 85 {
-        "↑↓ select   → open   ← up   Enter cd here   Tab cd selected   . hidden   ? help"
+    let file_selected = model.selected_entry().is_some_and(|entry| !entry.is_dir());
+    let hints = if keys.width >= 85 && !file_selected {
+        "↑↓ select  → open  ← up  Enter cd here  Tab cd selected  Ctrl-F files  ? help"
+    } else if file_selected && keys.width >= 52 {
+        "↑↓ select  ← up  Enter cd here  Ctrl-F files  ? help"
+    } else if file_selected {
+        "↑↓ select  ← up  Enter cd  ? help"
     } else {
-        "↑↓ select  → open  ← up  Enter cd  Esc cancel  ? help"
+        "↑↓ select  → in  ← up  Enter cd  ? help"
     };
     frame.render_widget(Paragraph::new(hints).style(theme.muted), keys);
     if model.help {
@@ -240,33 +328,62 @@ pub fn draw(frame: &mut Frame<'_>, model: &mut Model, theme: Theme, preview_enab
 }
 
 fn draw_preview(frame: &mut Frame<'_>, area: Rect, model: &Model, theme: Theme) {
+    let selected = model.selected_entry();
+    let detail = selected.is_some_and(|entry| !entry.is_dir());
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(theme.border)
-        .title(" NEXT → ");
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    let inner = inner.inner(Margin {
+        .title(if detail { " DETAILS " } else { " NEXT → " });
+    let inner = block.inner(area).inner(Margin {
         horizontal: 1,
         vertical: 0,
     });
+    frame.render_widget(block, area);
+    if let Some(entry) = selected.filter(|entry| !entry.is_dir()) {
+        // Deliberately no content reads, stat calls, or external viewers here.
+        let mut lines = vec![
+            Line::styled(
+                middle(&entry.label, inner.width as usize),
+                theme.entry_style(entry),
+            ),
+            Line::styled(entry.type_label(), theme.entry_style(entry)),
+        ];
+        if entry.symlink {
+            lines.push(Line::styled("Symbolic link ↗", theme.muted));
+        }
+        lines.push(Line::raw(""));
+        if entry.kind == EntryKind::UnresolvedLink {
+            lines.push(Line::styled("Target unavailable", theme.warning));
+        } else if matches!(entry.kind, EntryKind::File(_)) {
+            lines.push(Line::styled(
+                "Category inferred from filename.",
+                theme.muted,
+            ));
+        }
+        lines.extend([
+            Line::styled("Not opened or executed.", theme.muted),
+            Line::raw(""),
+            Line::raw("Enter   cd to this folder"),
+            Line::raw("Ctrl-F  show folders only"),
+        ]);
+        frame.render_widget(Paragraph::new(Text::from(lines)), inner);
+        return;
+    }
     let Some(path) = &model.preview_path else {
         frame.render_widget(
-            Paragraph::new("Select a folder to see what is inside.").style(theme.muted),
+            Paragraph::new("Select a folder to see inside.").style(theme.muted),
             inner,
         );
         return;
     };
+    let label = safe_label(
+        &path
+            .file_name()
+            .unwrap_or(path.as_os_str())
+            .to_string_lossy(),
+    );
     let mut lines = vec![Line::styled(
-        tail(
-            &safe_label(
-                &path
-                    .file_name()
-                    .unwrap_or(path.as_os_str())
-                    .to_string_lossy(),
-            ),
-            inner.width as usize,
-        ),
+        middle(&label, inner.width as usize),
         theme.accent,
     )];
     if let Some(error) = &model.preview_error {
@@ -278,20 +395,20 @@ fn draw_preview(frame: &mut Frame<'_>, area: Rect, model: &Model, theme: Theme) 
         let mut entries = listing
             .entries
             .iter()
-            .filter(|entry| model.show_hidden || !entry.hidden)
+            .filter(|entry| model.preview_visible(entry))
             .peekable();
         if entries.peek().is_none() {
-            lines.push(Line::styled("No subfolders", theme.muted));
+            lines.push(Line::styled(
+                if model.dirs_only {
+                    "No subfolders · Ctrl-F shows files"
+                } else {
+                    "No visible entries"
+                },
+                theme.muted,
+            ));
         } else {
             for entry in entries.take(inner.height.saturating_sub(1) as usize) {
-                lines.push(Line::styled(
-                    format!(
-                        "  {}/{}",
-                        tail(&entry.label, inner.width.saturating_sub(5) as usize),
-                        if entry.symlink { " ↗" } else { "" }
-                    ),
-                    theme.muted,
-                ));
+                lines.push(row(entry, "", theme, inner.width as usize));
             }
         }
     } else if model.preview_loading {
@@ -301,8 +418,8 @@ fn draw_preview(frame: &mut Frame<'_>, area: Rect, model: &Model, theme: Theme) 
 }
 
 fn draw_help(frame: &mut Frame<'_>, area: Rect, theme: Theme) {
-    let width = area.width.saturating_sub(2).min(70);
-    let height = area.height.saturating_sub(2).min(20);
+    let width = area.width.saturating_sub(2).min(74);
+    let height = area.height.saturating_sub(2).min(21);
     let popup = Rect::new(
         area.x + (area.width - width) / 2,
         area.y + (area.height - height) / 2,
@@ -310,24 +427,25 @@ fn draw_help(frame: &mut Frame<'_>, area: Rect, theme: Theme) {
         height,
     );
     let text = [
-        "↑ / ↓          Select a folder",
-        "→              Open selected folder",
+        "↑ / ↓          Select a folder or file",
+        "→              Open selected folder (never a file)",
         "←              Parent (keep the folder selected)",
         "Enter          Finish in the directory in the header",
         "Tab            Open selected folder and finish",
-        "Type           Fuzzy-filter this directory (q is a letter!)",
-        "Backspace      Erase one character; parent if filter is empty",
+        "Type           Fuzzy-filter folders and files",
+        "Backspace      Erase a character; parent if filter is empty",
         "Esc            Clear filter; otherwise cancel without cd",
         "Ctrl-C / Ctrl-D Cancel immediately",
-        ".              Toggle hidden folders when filter is empty",
+        "Ctrl-F         Show / hide files (directories stay first)",
+        ".              Toggle hidden entries when filter is empty",
         "Ctrl-U         Clear the filter",
         "Ctrl-L         Refresh the current directory",
         "Ctrl-G         Home directory",
-        "Home / End     First / last folder",
+        "Home / End     First / last entry",
         "PageUp / Down  Move by a page",
         "? / F1         Toggle this help",
         "",
-        "Read-only navigation. No indexing, daemon, or file operations.",
+        "File categories are name-based. No file is opened or executed.",
     ];
     frame.render_widget(Clear, popup);
     frame.render_widget(
@@ -349,39 +467,59 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
+    fn mixed_model() -> Model {
+        let root = PathBuf::from("/code");
+        let mut model = Model::new(root.clone(), false);
+        model.complete_navigation(Arc::new(Listing {
+            entries: vec![
+                Entry::new(root.join("app"), false),
+                Entry::file(root.join("Cargo.toml"), false),
+                Entry::file(root.join("main.rs"), false),
+                Entry::file(root.join("README.md"), false),
+            ],
+            skipped: 0,
+        }));
+        model
+    }
+
+    fn text(terminal: &Terminal<TestBackend>) -> String {
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
     #[test]
-    fn truncation_respects_unicode_cells() {
-        for width in 0..20 {
-            assert!(UnicodeWidthStr::width(tail("/home/日本/🧑‍💻/räv", width).as_str()) <= width);
+    fn truncation_respects_unicode_cells_and_preserves_extensions() {
+        for width in 0..30 {
+            for input in [
+                "/home/日本/🧑‍💻/räv",
+                "a-very-long-source-file.rs",
+                "e\u{301}🦊日本.txt",
+            ] {
+                assert!(UnicodeWidthStr::width(tail(input, width).as_str()) <= width);
+                assert!(UnicodeWidthStr::width(middle(input, width).as_str()) <= width);
+            }
         }
         assert_eq!(tail("short", 10), "short");
+        let label = middle("a-very-long-source-file.rs", 15);
+        assert!(label.starts_with("a-very"));
+        assert!(label.ends_with(".rs"));
     }
 
     #[test]
     fn renders_tiny_normal_and_wide_terminals() {
         for (width, height) in [(1, 1), (19, 6), (20, 7), (40, 10), (80, 24), (120, 30)] {
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-            let root = PathBuf::from("/code");
-            let mut model = Model::new(root.clone(), false);
-            model.complete_navigation(Arc::new(Listing {
-                entries: ["app", "notes", "tools"]
-                    .iter()
-                    .map(|name| Entry::new(root.join(name), false))
-                    .collect(),
-                skipped: 0,
-            }));
+            let mut model = mixed_model();
             terminal
                 .draw(|frame| draw(frame, &mut model, Theme::new(false), true))
                 .unwrap();
             if width >= 20 && height >= 9 {
-                let text: String = terminal
-                    .backend()
-                    .buffer()
-                    .content
-                    .iter()
-                    .map(|cell| cell.symbol())
-                    .collect();
-                assert!(text.contains("app/"), "folders hidden at {width}x{height}");
+                assert!(text(&terminal).contains("app/"));
             }
             model.help = true;
             terminal
@@ -405,32 +543,100 @@ mod tests {
             terminal
                 .draw(|frame| draw(frame, &mut model, Theme::new(true), false))
                 .unwrap();
-            let text: String = terminal
-                .backend()
-                .buffer()
-                .content
-                .iter()
-                .map(|cell| cell.symbol())
-                .collect();
-            assert_eq!(text.matches("folder-").count(), page_size(height) as usize);
+            assert_eq!(
+                text(&terminal).matches("folder-").count(),
+                page_size(height) as usize
+            );
         }
     }
 
     #[test]
-    fn render_does_not_include_terminal_controls_from_paths() {
+    fn categories_have_distinct_colors_and_survive_no_color_mode() {
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-        let mut model = Model::new(PathBuf::from("/code/evil\x1b[2J"), false);
+        let mut model = mixed_model();
         terminal
             .draw(|frame| draw(frame, &mut model, Theme::new(false), false))
             .unwrap();
-        let text: String = terminal
-            .backend()
-            .buffer()
-            .content
+        let rendered = text(&terminal);
+        assert!(rendered.contains("Cargo.toml"));
+        assert!(rendered.contains("main.rs"));
+        assert!(rendered.contains("config"));
+        assert!(rendered.contains("code"));
+        assert!(rendered.contains("1 folders · 3 files"));
+        let colors: Vec<_> = model
+            .listing
+            .as_ref()
+            .unwrap()
+            .entries
             .iter()
-            .map(|cell| cell.symbol())
+            .map(|entry| Theme::new(false).entry_style(entry).fg)
             .collect();
-        assert!(!text.contains('\x1b'));
-        assert!(text.contains("ii"));
+        assert_ne!(colors[0], colors[1]);
+        assert_ne!(colors[1], colors[2]);
+        assert_ne!(colors[2], colors[3]);
+        model.move_selection(2);
+        terminal
+            .draw(|frame| draw(frame, &mut model, Theme::new(true), true))
+            .unwrap();
+        assert!(text(&terminal).contains("main.rs"));
+        for cell in &terminal.backend().buffer().content {
+            assert_eq!(cell.fg, Color::Reset);
+            assert_eq!(cell.bg, Color::Reset);
+        }
+        assert!(
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .any(|cell| cell.modifier.contains(Modifier::REVERSED))
+        );
+    }
+
+    #[test]
+    fn next_directory_shows_files_but_file_details_never_show_stale_listing() {
+        let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
+        let mut model = mixed_model();
+        model.preview_path = model.selected_directory();
+        model.preview = Some(Arc::new(Listing {
+            entries: vec![
+                Entry::new(PathBuf::from("/code/app/src"), false),
+                Entry::file(PathBuf::from("/code/app/cover.webp"), false),
+            ],
+            skipped: 0,
+        }));
+        terminal
+            .draw(|frame| draw(frame, &mut model, Theme::new(false), true))
+            .unwrap();
+        assert!(text(&terminal).contains("cover.webp"));
+        model.toggle_files();
+        terminal
+            .draw(|frame| draw(frame, &mut model, Theme::new(false), true))
+            .unwrap();
+        assert!(!text(&terminal).contains("cover.webp"));
+        model.toggle_files();
+        model.move_selection(2);
+        terminal
+            .draw(|frame| draw(frame, &mut model, Theme::new(false), true))
+            .unwrap();
+        let rendered = text(&terminal);
+        assert!(rendered.contains("DETAILS"));
+        assert!(rendered.contains("Not opened or executed."));
+        assert!(!rendered.contains("cover.webp"));
+    }
+
+    #[test]
+    fn render_does_not_include_terminal_controls_from_paths_or_files() {
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        let mut model = Model::new(PathBuf::from("/code/evil\x1b[2J"), false);
+        model.complete_navigation(Arc::new(Listing {
+            entries: vec![Entry::file(PathBuf::from("/code/evil\x1b[2J.rs"), false)],
+            skipped: 0,
+        }));
+        terminal
+            .draw(|frame| draw(frame, &mut model, Theme::new(false), false))
+            .unwrap();
+        assert!(!text(&terminal).contains('\x1b'));
+        assert!(text(&terminal).contains("ii"));
     }
 }
