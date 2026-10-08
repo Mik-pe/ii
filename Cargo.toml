@@ -7,7 +7,7 @@ description = "Two taps. Any directory. A keyboard-first terminal navigator."
 license = "MIT"
 repository = "https://github.com/Mik-pe/ii"
 readme = "README.md"
-publish = false
+publish = true
 
 [dependencies]
 crossterm = "0.29"
