@@ -50,3 +50,32 @@ Use release builds and report the workload and machine. Keep claims about scan t
 The architecture and invariants are documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Runtime logic lives in `src/`, shell integration in `shell/`, Rust integration tests in `tests/`, and development-only Python utilities in `scripts/`.
 
 Dependencies are locked for reproducible application builds. Keep Cargo.lock committed. Changes should pass the standard read-only CI; there is no ongoing auto-commit or source-rewriting workflow.
+
+## Publishing in-i
+
+The registry package is `in-i`; its installed executable and library remain `ii`. Do not publish under the unrelated `ii` or `ini` registry names. The existing MIT license is included unchanged.
+
+Before the first release, confirm the name is still available on crates.io and that your account has publishing credentials (`cargo login`, or a scoped token supplied through Cargo's credential provider). A local dry run checks packaging/building; it does not reserve a name, verify account ownership, or upload a release.
+
+Run the checks above, then:
+
+```sh
+cargo package --locked --list
+cargo publish --locked --dry-run
+```
+
+From the reviewed, merged release commit, publish deliberately:
+
+```sh
+cargo publish --locked
+```
+
+Verify installation into an isolated root after the registry index has updated:
+
+```sh
+cargo install in-i --locked --root /tmp/in-i-install
+/tmp/in-i-install/bin/ii --version
+/tmp/in-i-install/bin/ii init bash
+```
+
+CI verifies the packaged build with a dry run. It never publishes automatically. Keep the package name, binary target, lockfile, README and package contents in sync.
