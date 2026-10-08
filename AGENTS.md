@@ -5,7 +5,7 @@ Read README.md and docs/ARCHITECTURE.md before changing behavior. This is a smal
 - Implement working code and regression tests, not placeholder features or speculative subsystems.
 - Keep the model free of terminal/filesystem I/O. Keep scanning off the input thread.
 - Preserve original PathBuf values, stdout's exact directory-path protocol, and quoted/literal shell cd behavior.
-- Enter in normal browsing finishes at the header path and cds in the shell. Right opens a directory in browsing; Enter in deep search opens the selected result in browsing. Navigation never exits or queues completion. Keep one binding per action within each view. Files are visible/selectable but are never opened, executed, or returned as cd targets.
+- Enter in normal browsing finishes at the header path and cds in the shell. Tab opens the selected directory in browsing or deep search; Right also opens a directory in browsing, and Enter also opens a deep-search result in browsing. Navigation never exits or queues completion. Keep bindings focused; Tab is the shared directory-opening shortcut across views. Files are visible/selectable but are never opened, executed, or returned as cd targets.
 - Preserve directory-first order during filtering, Ctrl-F visibility toggles, selected directories, and cached counts without per-arrow full-list scans.
 - Do not intercept ordinary letters such as f/q/j/k: users type them to filter.
 - Keep name-based file categories distinct from claims about contents, permissions, or executability. Do not read files for classification or preview.

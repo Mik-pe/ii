@@ -367,9 +367,93 @@ class TerminalIntegration(unittest.TestCase):
         session.send(b'\x12anything\x03')
         self.assertEqual(session.finish(), (130, b''))
 
-    def test_tab_is_unbound_and_does_not_navigate_or_finish(self):
+    def test_tab_opens_selected_directory_and_parent_restores_selection(self):
         session = self.session()
+        mark = session.send(b'\x1b[F\t')
+        session.expect(b'lib', mark)
+        session.assert_navigating()
+        mark = session.send(b'\x1b[D')
+        session.expect(b'app', mark)
+        mark = session.send(b'\t')
+        session.expect(b'lib', mark)
+        session.assert_navigating()
+        session.send(b'\r')
+        self.assertEqual(session.finish(), (0, os.fsencode(str(self.root / 'tools'))))
+
+    def test_tab_opens_locally_filtered_directory_and_clears_filter(self):
+        session = self.session()
+        mark = session.send(b'tl\t')
+        session.expect(b'lib', mark)
+        session.assert_navigating()
+        mark = session.send(b'\t')
+        session.expect(b'/lib', mark)
+        session.assert_navigating()
+        session.send(b'\x1b')
+        self.assertEqual(session.finish(), (130, b''))
+
+    def test_tab_then_enter_in_one_burst_finishes_in_entered_directory(self):
+        session = self.session()
+        session.send(b'\t\r')
+        self.assertEqual(session.finish(), (0, os.fsencode(str(self.root / 'app'))))
+
+    def test_tab_on_file_or_no_match_never_navigates(self):
+        (self.root / 'README.md').write_text('PRIVATE_CONTENT')
+        session = self.session(preview=True)
+        mark = session.send(b'readme\t')
+        session.expect(b'File selected', mark)
+        session.assert_navigating()
+        self.assertNotIn(b'PRIVATE_CONTENT', session.transcript)
+        # Clear the file filter, then try a filter without any matches.
+        session.send(b'\x1b')
+        session.assert_navigating()
+        session.send(b'zzzz\t')
+        session.assert_navigating()
+        session.send(b'\r')
+        self.assertEqual(session.finish(), (0, os.fsencode(str(self.root))))
+
+    def test_tab_in_empty_directory_never_finishes(self):
+        path = self.root / 'app' / 'src'
+        session = self.session(path)
         session.send(b'\t')
+        session.assert_navigating()
+        session.send(b'\r')
+        self.assertEqual(session.finish(), (0, os.fsencode(str(path))))
+
+    def test_deep_tab_uses_selected_result_and_allows_further_browsing(self):
+        (self.root / 'app' / 'api').mkdir()
+        target = self.root / 'tools' / 'api'
+        (target / 'child').mkdir(parents=True)
+        session = self.session()
+        self.search(session, b'api')
+        mark = session.send(b'\x1b[B\t')
+        session.expect(b'child', mark)
+        session.assert_navigating()
+        session.send(b'\t\r')
+        self.assertEqual(session.finish(), (0, os.fsencode(str(target / 'child'))))
+
+    def test_deep_tab_then_cancel_never_prints_a_path(self):
+        (self.root / 'app' / 'api').mkdir()
+        session = self.session()
+        self.search(session, b'api')
+        mark = session.send(b'\t')
+        session.expect(b'/api', mark)
+        session.assert_navigating()
+        session.send(b'\x1b')
+        self.assertEqual(session.finish(), (130, b''))
+
+    def test_deep_tab_does_not_open_empty_or_stale_results(self):
+        (self.root / 'app' / 'api').mkdir()
+        session = self.session()
+        mark = session.send(b'\x12\t')
+        session.expect(b'DEEP SEARCH', mark)
+        session.assert_navigating()
+        mark = session.send(b'api')
+        session.expect(b'done', mark)
+        session.assert_navigating()
+        mark = session.send(b'\x7f\x7f\x7fzzzz\t')
+        session.expect(b'done', mark)
+        session.assert_navigating()
+        session.send(b'\t\x1b')
         session.assert_navigating()
         session.send(b'\r')
         self.assertEqual(session.finish(), (0, os.fsencode(str(self.root))))

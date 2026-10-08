@@ -27,7 +27,7 @@ The optional `justfile` wraps these commands; `just` is not a runtime or build d
 
 ## Change checklist
 
-Preserve arrow semantics and selection when returning to a parent. Right enters a directory inside the browsing UI. In deep search, Enter opens the selected result in the browsing view; in normal browsing, Enter confirms cd in the shell. Test that opening a search result stays interactive, emits no stdout path, and can be followed by cancellation. Keep one binding per action within each view. Do not use ordinary letters as navigation shortcuts while they are expected to filter. Keep slow filesystem work off the input thread and bounded: avoid automatic whole-tree scans, one thread per keypress, and unbounded queues.
+Preserve arrow semantics and selection when returning to a parent. Tab enters the selected directory in either view, and Right also enters a directory inside the browsing UI. In deep search, Enter also opens the selected result in the browsing view; in normal browsing, Enter confirms cd in the shell. Test that opening a search result stays interactive, emits no stdout path, and can be followed by cancellation. Keep Tab consistent across views and preserve the existing Right/Enter bindings. Do not use ordinary letters as navigation shortcuts while they are expected to filter. Keep slow filesystem work off the input thread and bounded: avoid automatic whole-tree scans, one thread per keypress, and unbounded queues.
 
 Never replace an original path with its display label. Do not use `eval`, wildcard expansion, or whitespace splitting on selected paths. Exercise spaces, quotes, shell metacharacters, Unicode, invalid UTF-8 on Unix, and embedded/trailing newlines when changing the output or shell protocol.
 

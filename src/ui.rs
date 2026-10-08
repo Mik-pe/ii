@@ -358,15 +358,15 @@ pub fn draw(frame: &mut Frame<'_>, model: &mut Model, theme: Theme, preview_enab
     frame.render_widget(Paragraph::new(text), status);
     let file_selected = model.selected_entry().is_some_and(|entry| !entry.is_dir());
     let hints = if model.deep.is_some() {
-        "↑↓ select  Enter open result  Esc back"
+        "↑↓ select  Tab / Enter open result  Esc back"
     } else if keys.width >= 85 && !file_selected {
-        "↑↓ select  → open  ← up  Enter cd  Ctrl-R deep  Ctrl-F files  ? help"
+        "↑↓ select  Tab / → open  ← up  Enter cd  Ctrl-R deep  Ctrl-F files  ? help"
     } else if file_selected && keys.width >= 52 {
         "↑↓ select  ← up  Enter cd here  Ctrl-F files  ? help"
     } else if file_selected {
         "↑↓ select  ← up  Enter cd  ? help"
     } else {
-        "↑↓ select  → in ← up  Enter cd  ? help"
+        "↑↓ select  Tab in  ← up  Enter cd  ? help"
     };
     frame.render_widget(Paragraph::new(hints).style(theme.muted), keys);
     if model.help {
@@ -475,6 +475,7 @@ fn draw_help(frame: &mut Frame<'_>, area: Rect, theme: Theme) {
     );
     let text = [
         "↑ / ↓          Select a folder or file",
+        "Tab            Open selected folder or deep-search result",
         "→              Open selected folder (never a file)",
         "←              Parent (keep the folder selected)",
         "Enter          cd here; in deep search, open result",
@@ -687,6 +688,23 @@ mod tests {
     }
 
     #[test]
+    fn tab_hint_is_visible_at_narrow_and_wide_sizes_and_hidden_for_files() {
+        for width in [40, 80, 85, 120] {
+            let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
+            let mut model = mixed_model();
+            terminal
+                .draw(|frame| draw(frame, &mut model, Theme::new(true), false))
+                .unwrap();
+            assert!(text(&terminal).contains("Tab"));
+            model.move_selection(1);
+            terminal
+                .draw(|frame| draw(frame, &mut model, Theme::new(true), false))
+                .unwrap();
+            assert!(!text(&terminal).contains("Tab"));
+        }
+    }
+
+    #[test]
     fn deep_view_has_relative_paths_and_explicit_limit_and_completion_hints() {
         let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
         let mut model = mixed_model();
@@ -711,6 +729,6 @@ mod tests {
         assert!(rendered.contains("DEEP SEARCH"));
         assert!(rendered.contains("server/services/api"));
         assert!(rendered.contains("limited"));
-        assert!(rendered.contains("Enter open result"));
+        assert!(rendered.contains("Tab / Enter open result"));
     }
 }

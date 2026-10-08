@@ -229,7 +229,7 @@ impl Model {
             .map(|entry| entry.path.clone())
     }
 
-    /// Local Right and deep-search Enter use this directory-only navigation guard.
+    /// Tab, local Right and deep-search Enter use this directory-only navigation guard.
     pub fn directory_target(&mut self) -> Option<PathBuf> {
         if let Some(path) = self.selected_directory() {
             return Some(path);
