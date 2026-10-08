@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import pty
 import select
+import shlex
+import shutil
 import signal
 import struct
 import subprocess
@@ -51,18 +53,32 @@ sys.exit(code if code >= 0 else 128 - code)
 
 
 class Session:
-    def __init__(self, path, *options, preview=False, cwd=None):
+    def __init__(self, path, *options, preview=False, cwd=None, shell=None, size=(24, 100), environment=None):
         self.master, self.slave = pty.openpty()
-        fcntl.ioctl(self.slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 100, 0, 0))
+        fcntl.ioctl(self.slave, termios.TIOCSWINSZ, struct.pack('HHHH', *size, 0, 0))
         self.transcript = bytearray()
         self.report = tempfile.TemporaryFile()
+        command = [str(BINARY), *([] if preview else ['--no-preview']), *options, str(path)]
+        env = dict(os.environ, TERM='xterm-256color')
+        if environment:
+            env.update(environment)
+        if shell:
+            executable = shutil.which(shell)
+            if not executable:
+                raise ValueError(f'{shell} is not installed')
+            binary = shlex.quote(str(BINARY))
+            setup = (f'{binary} init fish | source' if shell == 'fish'
+                     else f'eval "$({binary} init {shell})"')
+            code = setup + '\nii --hidden init\nprintf "%s" "$PWD"\n'
+            command = [executable, '-c', code]
+            env['PATH'] = f'{BINARY.parent}{os.pathsep}{env["PATH"]}'
         try:
             self.process = subprocess.Popen(
                 [sys.executable, '-c', SUPERVISOR, str(self.report.fileno()),
-                 str(BINARY), *([] if preview else ['--no-preview']), *options, str(path)],
+                 *command],
                 stdin=self.slave, stderr=self.slave, stdout=subprocess.PIPE,
                 pass_fds=(self.report.fileno(),), start_new_session=True,
-                env=dict(os.environ, TERM='xterm-256color'), cwd=cwd)
+                env=env, cwd=cwd)
         except BaseException:
             self.report.close()
             os.close(self.master)
@@ -131,7 +147,7 @@ class Session:
 class TerminalIntegration(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
         for directory in ['app/src', 'app/tests', 'notes', 'tools/lib']:
             (self.root / directory).mkdir(parents=True, exist_ok=True)
         self.sessions = []
@@ -182,6 +198,78 @@ class TerminalIntegration(unittest.TestCase):
         session.assert_navigating()
         session.send(b'\r')
         self.assertEqual(session.finish(), (0, os.fsencode(str(self.root / 'tools'))))
+
+    def test_refresh_retains_filter_and_escape_clears_instead_of_cancelling(self):
+        session = self.session()
+        session.send(b'tl\x0c')
+        session.assert_navigating()
+        session.send(b'\x1b')
+        session.assert_navigating()
+        session.send(b'\x03')
+        self.assertEqual(session.finish(), (130, b''))
+
+    def test_failed_navigation_restores_filter_and_allows_retry(self):
+        target = self.root / 'vanished'
+        target.mkdir()
+        session = self.session()
+        session.send(b'vanished')
+        session.assert_navigating()
+        target.rmdir()
+        mark = session.send(b'\t')
+        session.expect(b'No such file', mark)
+        session.assert_navigating()
+        # Restored filter makes Esc a clear operation, rather than cancellation.
+        session.send(b'\x1b')
+        session.assert_navigating()
+        session.send(b'tl\t\r')
+        self.assertEqual(session.finish(), (0, os.fsencode(str(self.root / 'tools'))))
+
+    def test_short_help_scrolls_and_escape_closes_without_cancelling(self):
+        session = Session(self.root, size=(12, 80))
+        self.sessions.append(session)
+        session.expect(b'app')
+        mark = session.send(b'?')
+        session.expect(b'Esc / ? close', mark)
+        mark = session.send(b'\x1b[6~')
+        session.expect(b'Ctrl-F', mark)
+        mark = session.send(b'\x1b[F')
+        session.expect(b'executed.', mark)
+        session.send(b'\x1b')
+        session.assert_navigating()
+        session.send(b'\t\r')
+        self.assertEqual(session.finish(), (0, os.fsencode(str(self.root / 'app'))))
+
+    def test_shell_functions_cd_into_init_with_the_actual_binary(self):
+        target = self.root / 'init'
+        target.mkdir()
+        for shell in ['bash', 'zsh', 'fish']:
+            if not shutil.which(shell):
+                print(f'SKIP: real {shell} PTY (shell not installed)')
+                continue
+            with self.subTest(shell=shell):
+                session = Session(target, shell=shell, cwd=self.root)
+                self.sessions.append(session)
+                session.expect(b'CONTENTS')
+                session.send(b'\r')
+                self.assertEqual(session.finish(), (0, os.fsencode(str(target))))
+
+    def test_light_theme_and_no_color_override(self):
+        for flags, expected_rgb in [
+            (['--theme', 'light'], True),
+            (['--theme=light', '--no-color'], False),
+        ]:
+            session = Session(self.root, *flags, environment={'NO_COLOR': ''})
+            self.sessions.append(session)
+            session.expect(b'app')
+            self.assertEqual(b'38;2;20;104;77' in session.transcript, expected_rgb)
+            session.send(b'\x03')
+            self.assertEqual(session.finish(), (130, b''))
+        session = Session(self.root, '--theme=light', environment={'NO_COLOR': '1'})
+        self.sessions.append(session)
+        session.expect(b'app')
+        self.assertNotIn(b'38;2;', session.transcript)
+        session.send(b'\x03')
+        self.assertEqual(session.finish(), (130, b''))
 
     def test_cancel_never_prints_a_path(self):
         session = self.session()

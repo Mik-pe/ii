@@ -1,33 +1,39 @@
 <p align="center">
-  <img src="docs/assets/cover.webp" alt="ii — fast terminal directory navigation, against an aurora-lit Nordic landscape" width="1200">
+  <img src="https://raw.githubusercontent.com/Mik-pe/ii/main/docs/assets/cover.webp" alt="ii — fast terminal directory navigation, against an aurora-lit Nordic landscape" width="1200">
 </p>
 
 <h1 align="center">ii</h1>
 <p align="center"><strong>Two taps. Any directory.</strong><br>A small, native Rust navigator for the space between <code>cd</code> and <code>ls</code>.</p>
 <p align="center">
   <a href="https://github.com/Mik-pe/ii/actions/workflows/ci.yml"><img src="https://github.com/Mik-pe/ii/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-85e8c2" alt="MIT license"></a>
+  <a href="https://github.com/Mik-pe/ii/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-85e8c2" alt="MIT license"></a>
 </p>
 
 Stop typing `cd app`, `ls`, `cd src`, `ls`. Open `ii`, see the folders **and files**, walk the directory tree with the arrow keys, and return to your shell where you want to be. The name comes from Swedish **in i** — “into.”
 
 <p align="center">
-  <img src="docs/assets/demo.svg" alt="Actual ii UI: directories first, color-coded files with type labels, and the next directory's contents" width="1200">
+  <img src="https://raw.githubusercontent.com/Mik-pe/ii/main/docs/assets/demo.svg" alt="Actual ii UI: directories first, color-coded files with type labels, and the next directory's contents" width="1200">
 </p>
 
-The second image is rendered by the actual UI code with generic fixture data, not a design mockup. Your terminal's font and default background may differ. The first image is cover art.
+The second image is rendered by the actual UI code using the dark palette and generic fixture data, not a design mockup. Your terminal's font and default background may differ. The first image is cover art.
 
 **See more. Navigate just as directly.** No file operations, file-content previews, background daemon, whole-disk index, or network requests.
 
 ## Install
 
-Use a current stable Rust toolchain:
+Use a current stable Rust toolchain. The crates.io package is named **`in-i`** (Swedish “in i”) and installs the **`ii`** command. For a published release:
+
+```sh
+cargo install in-i --locked
+```
+
+Until the first crates.io release is published, or to install the latest repository version:
 
 ```sh
 cargo install --git https://github.com/Mik-pe/ii --locked
 ```
 
-Make sure Cargo's binary directory is on your `PATH`. To update an existing installation, run the same command with `--force`. This repository is not distributed through `cargo install ii`; use the Git URL above. CI also produces platform-specific development archives with SHA-256 checksums, not a tagged stable release.
+Make sure Cargo's binary directory is on your `PATH`. To update an existing installation, add `--force` to the same command. `cargo install ii` refers to a different package. CI also produces platform-specific development archives with SHA-256 checksums, not a tagged stable release.
 
 ### Connect your shell
 
@@ -64,6 +70,8 @@ ii                    # Start here, with folders and files visible.
 ii ~/code             # Start somewhere else.
 ii --dirs-only        # Start with just folders; Ctrl-F brings files back.
 ii --no-preview       # Always use one pane.
+ii --theme light      # Readable colors on a light terminal background.
+ii --theme dark       # Original mint palette for dark backgrounds.
 ```
 
 Setup evaluates only the shell integration emitted by the installed binary. Directory names are **never evaluated as shell code**.
@@ -103,7 +111,7 @@ Directories always come first, including during filtering. Within each group, en
 
 Categories are inferred from names/extensions, not file contents or executable permissions. Symlinks keep a `↗` marker and their original alias paths. Sockets, devices, and other special entries are labeled `special`. An unresolved link may be broken **or inaccessible**; the UI does not pretend to know which.
 
-File-type labels appear when the list is wide enough. The wide detail pane repeats the selected file's category. Long names keep both their prefix and extension where space permits. `--no-color` or a nonempty `NO_COLOR` disables the palette; directory suffixes, labels, and reverse-video selection remain.
+The table describes the dark palette; the light palette uses darker counterparts. By default, ii uses your terminal's foreground/background and reverse-video selection. Choose `--theme dark` or `--theme light` to enable category colors. File-type labels appear when the list is wide enough. The wide detail pane repeats the selected file's category. Long names keep both their prefix and extension where space permits. `--no-color` or a nonempty `NO_COLOR` overrides any theme with terminal defaults; directory suffixes, labels, and reverse-video selection remain.
 
 Files can be selected and filtered, but **Tab and Right never open, execute, or try to `cd` into them**. A small hint explains the available action. **Enter still changes to the directory in the header**, even with a file selected. File details do not read the file's contents.
 
@@ -125,12 +133,14 @@ Files can be selected and filtered, but **Tab and Right never open, execute, or 
 | **Esc** | Clear the filter; otherwise cancel without a directory change. |
 | **Ctrl-C** | Cancel immediately. |
 | **.** | Toggle hidden entries when the filter is empty. |
-| **Ctrl-L / Ctrl-G** | Refresh directory / go home. |
+| **Ctrl-L / Ctrl-G** | Refresh without losing the filter / go home. |
 | **Home / End** | First / last visible entry. |
 | **PageUp / PageDown** | Move by a page. |
-| **?** | Toggle help. |
+| **?** | Open help; Esc or ? closes it. Arrows and PageUp/PageDown scroll help. |
 
 **In normal browsing, Tab or `→` opens a directory and Enter confirms the header directory in your shell.** In deep search, Tab or Enter opens the selected result in the browsing view and Esc restores the previous local view. After navigating, Esc still cancels without changing the shell directory. An Enter pressed while a browsing directory loads is remembered; opening a search result never queues a finish. Tab opens the highlighted directory without finishing, including while filtering. Ctrl-N/P, Ctrl-U, Ctrl-D and F1 have no bindings. Backspace only edits the filter; `←` goes up.
+
+Refreshing preserves the filter, selection and scroll position while revalidating the listing. A failed navigation restores the previous directory, filter, selection and scroll so you can choose another destination.
 
 Selection is remembered within the session, including when returning to a parent or revisiting a directory. There is no persistent history or hidden prediction model.
 
@@ -138,7 +148,7 @@ Every ordinary letter remains available for filtering, including `q`, `f`, `h`, 
 
 ## Small interface, deliberate behavior
 
-The compact, mint-accented UI uses the terminal's alternate screen. At 90 columns or wider, the right-hand pane shows the selected directory's contents, or a selected file's name/category. Below that width it disappears. `--no-preview` disables it entirely. Vertical spacing contracts in short windows. No Nerd Font is required. Deep search uses the full list width to display relative paths without launching preview reads.
+The compact UI uses the terminal's alternate screen. At 90 columns or wider, the right-hand pane shows the selected directory's contents, or a selected file's name/category. Below that width it disappears. `--no-preview` disables it entirely. Vertical spacing contracts in short windows. Help wraps in narrow windows and scrolls in short ones, with a fixed close hint. The next-directory pane marks omitted rows with `… more entries`. No Nerd Font is required. Deep search uses the full list width to display relative paths without launching preview reads.
 
 Status counts distinguish visible folders, files, and special entries. Keyboard hints adapt to the selected entry: a file does not advertise a directory-opening action.
 
@@ -146,6 +156,7 @@ Status counts distinguish visible folders, files, and special entries. Keyboard 
 -a, --hidden      Show hidden entries
     --dirs-only   Start with files hidden; Ctrl-F toggles
     --no-preview  Disable the next-directory / detail pane
+    --theme MODE  terminal (default), dark, or light
     --no-color    Use terminal defaults and reverse-video selection
     --print0      Write a NUL-terminated path for scripts
 -h, --help        Show help
@@ -167,7 +178,7 @@ Showing files necessarily constructs and sorts more entries than a directory-onl
 cargo bench --locked --bench navigation
 ```
 
-[Measurements and methodology](docs/PERFORMANCE.md) distinguish listing scans from matching, startup, and keypress latency. They do not claim a comparison with other tools.
+[Measurements and methodology](https://github.com/Mik-pe/ii/blob/main/docs/PERFORMANCE.md) distinguish listing scans from matching, startup, and keypress latency. They do not claim a comparison with other tools.
 
 ## Shell protocol and path safety
 
@@ -196,8 +207,8 @@ cargo run --locked --example render_demo > docs/assets/demo.svg
 
 CI builds/tests on Linux, macOS, and Windows and checks Rust 1.88 compatibility. Unix PTY tests exercise real key events, file visibility, resolved start paths, explicit deep search, file-navigation guards, cancellation, and terminal restoration. Shell tests cover quoting, Unicode, trailing newlines, and error handling. Windows tests cover PowerShell alias resolution, initialization, and informational commands; full interactive Windows console behavior still needs separate validation.
 
-See [architecture](docs/ARCHITECTURE.md) and [contributing](CONTRIBUTING.md). This is an initial implementation, not a declared stable release.
+See [architecture](https://github.com/Mik-pe/ii/blob/main/docs/ARCHITECTURE.md) and [contributing](https://github.com/Mik-pe/ii/blob/main/CONTRIBUTING.md). This is an initial implementation, not a declared stable release.
 
 ## License
 
-[MIT](LICENSE).
+[MIT](https://github.com/Mik-pe/ii/blob/main/LICENSE).

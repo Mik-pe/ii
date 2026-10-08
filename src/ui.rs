@@ -12,6 +12,14 @@ use crate::filesystem::{Entry, EntryKind, FileKind};
 use crate::filter::safe_label;
 use crate::model::Model;
 
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub enum Palette {
+    #[default]
+    Terminal,
+    Dark,
+    Light,
+}
+
 #[derive(Clone, Copy)]
 pub struct Theme {
     pub accent: Style,
@@ -19,19 +27,33 @@ pub struct Theme {
     pub selected: Style,
     pub warning: Style,
     pub border: Style,
-    no_color: bool,
+    palette: Palette,
 }
 
 impl Theme {
-    pub fn new(no_color: bool) -> Self {
-        if no_color {
+    pub fn new(palette: Palette) -> Self {
+        if palette == Palette::Terminal {
             Self {
                 accent: Style::default().add_modifier(Modifier::BOLD),
                 muted: Style::default(),
                 selected: Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD),
                 warning: Style::default().add_modifier(Modifier::BOLD),
                 border: Style::default(),
-                no_color,
+                palette,
+            }
+        } else if palette == Palette::Light {
+            Self {
+                accent: Style::default()
+                    .fg(Color::Rgb(20, 104, 77))
+                    .add_modifier(Modifier::BOLD),
+                muted: Style::default().fg(Color::Rgb(80, 96, 108)),
+                selected: Style::default()
+                    .fg(Color::Rgb(18, 66, 50))
+                    .bg(Color::Rgb(211, 239, 226))
+                    .add_modifier(Modifier::BOLD),
+                warning: Style::default().fg(Color::Rgb(130, 70, 15)),
+                border: Style::default().fg(Color::Rgb(91, 112, 115)),
+                palette,
             }
         } else {
             Self {
@@ -45,7 +67,7 @@ impl Theme {
                     .add_modifier(Modifier::BOLD),
                 warning: Style::default().fg(Color::Rgb(244, 188, 111)),
                 border: Style::default().fg(Color::Rgb(73, 96, 101)),
-                no_color,
+                palette,
             }
         }
     }
@@ -54,16 +76,23 @@ impl Theme {
         if entry.is_dir() {
             return self.accent;
         }
-        if self.no_color {
+        if self.palette == Palette::Terminal {
             return Style::default();
         }
-        let color = match entry.kind {
-            EntryKind::File(FileKind::Code) => Color::Rgb(137, 180, 250),
-            EntryKind::File(FileKind::Config) => Color::Rgb(232, 198, 122),
-            EntryKind::File(FileKind::Document) => Color::Rgb(203, 213, 225),
-            EntryKind::File(FileKind::Media) => Color::Rgb(211, 166, 235),
-            EntryKind::File(FileKind::Archive) => Color::Rgb(235, 168, 107),
-            EntryKind::UnresolvedLink => Color::Rgb(243, 139, 168),
+        let color = match (self.palette, entry.kind) {
+            (Palette::Light, EntryKind::File(FileKind::Code)) => Color::Rgb(34, 82, 153),
+            (Palette::Light, EntryKind::File(FileKind::Config)) => Color::Rgb(120, 78, 12),
+            (Palette::Light, EntryKind::File(FileKind::Document)) => Color::Rgb(61, 75, 88),
+            (Palette::Light, EntryKind::File(FileKind::Media)) => Color::Rgb(109, 57, 135),
+            (Palette::Light, EntryKind::File(FileKind::Archive)) => Color::Rgb(145, 64, 23),
+            (Palette::Light, EntryKind::UnresolvedLink) => Color::Rgb(161, 43, 66),
+            (Palette::Light, _) => Color::Rgb(80, 96, 108),
+            (_, EntryKind::File(FileKind::Code)) => Color::Rgb(137, 180, 250),
+            (_, EntryKind::File(FileKind::Config)) => Color::Rgb(232, 198, 122),
+            (_, EntryKind::File(FileKind::Document)) => Color::Rgb(203, 213, 225),
+            (_, EntryKind::File(FileKind::Media)) => Color::Rgb(211, 166, 235),
+            (_, EntryKind::File(FileKind::Archive)) => Color::Rgb(235, 168, 107),
+            (_, EntryKind::UnresolvedLink) => Color::Rgb(243, 139, 168),
             _ => Color::Rgb(160, 173, 185),
         };
         Style::default().fg(color)
@@ -370,7 +399,7 @@ pub fn draw(frame: &mut Frame<'_>, model: &mut Model, theme: Theme, preview_enab
     };
     frame.render_widget(Paragraph::new(hints).style(theme.muted), keys);
     if model.help {
-        draw_help(frame, area, theme);
+        draw_help(frame, area, model, theme);
     }
 }
 
@@ -439,12 +468,13 @@ fn draw_preview(frame: &mut Frame<'_>, area: Rect, model: &Model, theme: Theme) 
             theme.warning,
         ));
     } else if let Some(listing) = &model.preview {
-        let mut entries = listing
+        let entries = listing
             .entries
             .iter()
             .filter(|entry| model.preview_visible(entry))
-            .peekable();
-        if entries.peek().is_none() {
+            .take(inner.height as usize)
+            .collect::<Vec<_>>();
+        if entries.is_empty() {
             lines.push(Line::styled(
                 if model.dirs_only {
                     "No subfolders · Ctrl-F shows files"
@@ -454,8 +484,20 @@ fn draw_preview(frame: &mut Frame<'_>, area: Rect, model: &Model, theme: Theme) 
                 theme.muted,
             ));
         } else {
-            for entry in entries.take(inner.height.saturating_sub(1) as usize) {
+            let capacity = inner.height.saturating_sub(1) as usize;
+            // One extra visible entry proves overflow without scanning the entire listing.
+            let overflow = entries.len() > capacity;
+            let shown = capacity.saturating_sub(usize::from(overflow));
+            for entry in entries.into_iter().take(shown) {
                 lines.push(row(entry, "", theme, inner.width as usize));
+            }
+            if overflow {
+                let notice = Line::styled("… more entries", theme.muted);
+                if inner.height == 1 {
+                    lines[0] = notice;
+                } else {
+                    lines.push(notice);
+                }
             }
         }
     } else if model.preview_loading {
@@ -464,7 +506,65 @@ fn draw_preview(frame: &mut Frame<'_>, area: Rect, model: &Model, theme: Theme) 
     frame.render_widget(Paragraph::new(Text::from(lines)), inner);
 }
 
-fn draw_help(frame: &mut Frame<'_>, area: Rect, theme: Theme) {
+fn help_footer_height(width: u16) -> u16 {
+    if width >= 42 { 1 } else { 2 }
+}
+
+pub fn help_page_size(width: u16, height: u16) -> u16 {
+    let inner_width = width.saturating_sub(2).min(74).saturating_sub(2);
+    height
+        .saturating_sub(2)
+        .min(22)
+        .saturating_sub(2 + help_footer_height(inner_width))
+        .max(1)
+}
+
+fn help_lines(width: usize) -> Vec<String> {
+    let text = [
+        "↑ / ↓          Select a folder or file",
+        "Tab            Open selected folder or deep-search result",
+        "→              Open selected folder (never a file)",
+        "←              Parent (keep the folder selected)",
+        "Enter          cd here; in deep search, open result",
+        "Type           Fuzzy-filter folders and files",
+        "Backspace      Erase a grapheme from the filter",
+        "Esc            In browsing: clear filter, then cancel",
+        "Ctrl-C         Cancel immediately",
+        "Ctrl-F         Show / hide files (directories stay first)",
+        "Ctrl-R         Deep folder search; Esc returns to browsing",
+        ".              Toggle hidden entries when filter is empty",
+        "Ctrl-L         Refresh; keep filter, selection and scroll",
+        "Ctrl-G         Home directory",
+        "Home / End     First / last entry",
+        "PageUp / Down  Move by a page",
+        "?              Open help when filter is empty",
+        "",
+        "File categories are name-based. No file is opened or executed.",
+    ];
+    let mut lines = Vec::new();
+    for text in text {
+        if UnicodeWidthStr::width(text) <= width {
+            lines.push(text.to_owned());
+            continue;
+        }
+        let mut line = String::new();
+        for word in text.split_whitespace() {
+            if !line.is_empty()
+                && UnicodeWidthStr::width(line.as_str()) + 1 + UnicodeWidthStr::width(word) > width
+            {
+                lines.push(std::mem::take(&mut line));
+            }
+            if !line.is_empty() {
+                line.push(' ');
+            }
+            line.push_str(word);
+        }
+        lines.push(line);
+    }
+    lines
+}
+
+fn draw_help(frame: &mut Frame<'_>, area: Rect, model: &mut Model, theme: Theme) {
     let width = area.width.saturating_sub(2).min(74);
     let height = area.height.saturating_sub(2).min(22);
     let popup = Rect::new(
@@ -473,36 +573,34 @@ fn draw_help(frame: &mut Frame<'_>, area: Rect, theme: Theme) {
         width,
         height,
     );
-    let text = [
-        "↑ / ↓          Select a folder or file",
-        "Tab            Open selected folder or deep-search result",
-        "→              Open selected folder (never a file)",
-        "←              Parent (keep the folder selected)",
-        "Enter          cd here; in deep search, open result",
-        "Type           Fuzzy-filter folders and files",
-        "Backspace      Erase a character from the filter",
-        "Esc            Clear filter; otherwise cancel without cd",
-        "Ctrl-C         Cancel immediately",
-        "Ctrl-F         Show / hide files (directories stay first)",
-        "Ctrl-R         Deep folder search; Esc returns to browsing",
-        ".              Toggle hidden entries when filter is empty",
-        "Ctrl-L         Refresh the current directory",
-        "Ctrl-G         Home directory",
-        "Home / End     First / last entry",
-        "PageUp / Down  Move by a page",
-        "?              Toggle this help",
-        "",
-        "File categories are name-based. No file is opened or executed.",
-    ];
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(theme.accent)
+        .title(" ii · help ");
+    let inner = block.inner(popup);
+    let [content, footer] = Layout::vertical([
+        Constraint::Min(1),
+        Constraint::Length(help_footer_height(inner.width)),
+    ])
+    .areas(inner);
+    let lines = help_lines(content.width as usize);
+    model.help_offset = model
+        .help_offset
+        .min(lines.len().saturating_sub(content.height as usize));
     frame.render_widget(Clear, popup);
+    frame.render_widget(block, popup);
     frame.render_widget(
-        Paragraph::new(text.join("\n")).block(
-            Block::bordered()
-                .border_type(BorderType::Rounded)
-                .border_style(theme.accent)
-                .title(" ii · two taps, any directory "),
-        ),
-        popup,
+        Paragraph::new(lines[model.help_offset..].join("\n")),
+        content,
+    );
+    frame.render_widget(
+        Paragraph::new(if footer.height == 1 {
+            "↑↓ / PgUp PgDn scroll · Esc / ? close"
+        } else {
+            "↑↓ scroll\nEsc / ? close"
+        })
+        .style(theme.accent),
+        footer,
     );
 }
 
@@ -563,14 +661,14 @@ mod tests {
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             let mut model = mixed_model();
             terminal
-                .draw(|frame| draw(frame, &mut model, Theme::new(false), true))
+                .draw(|frame| draw(frame, &mut model, Theme::new(Palette::Dark), true))
                 .unwrap();
             if width >= 20 && height >= 9 {
                 assert!(text(&terminal).contains("app/"));
             }
             model.help = true;
             terminal
-                .draw(|frame| draw(frame, &mut model, Theme::new(true), true))
+                .draw(|frame| draw(frame, &mut model, Theme::new(Palette::Terminal), true))
                 .unwrap();
         }
     }
@@ -588,7 +686,7 @@ mod tests {
                 skipped: 0,
             }));
             terminal
-                .draw(|frame| draw(frame, &mut model, Theme::new(true), false))
+                .draw(|frame| draw(frame, &mut model, Theme::new(Palette::Terminal), false))
                 .unwrap();
             assert_eq!(
                 text(&terminal).matches("folder-").count(),
@@ -602,7 +700,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         let mut model = mixed_model();
         terminal
-            .draw(|frame| draw(frame, &mut model, Theme::new(false), false))
+            .draw(|frame| draw(frame, &mut model, Theme::new(Palette::Dark), false))
             .unwrap();
         let rendered = text(&terminal);
         assert!(rendered.contains("Cargo.toml"));
@@ -616,14 +714,14 @@ mod tests {
             .unwrap()
             .entries
             .iter()
-            .map(|entry| Theme::new(false).entry_style(entry).fg)
+            .map(|entry| Theme::new(Palette::Dark).entry_style(entry).fg)
             .collect();
         assert_ne!(colors[0], colors[1]);
         assert_ne!(colors[1], colors[2]);
         assert_ne!(colors[2], colors[3]);
         model.move_selection(2);
         terminal
-            .draw(|frame| draw(frame, &mut model, Theme::new(true), true))
+            .draw(|frame| draw(frame, &mut model, Theme::new(Palette::Terminal), true))
             .unwrap();
         assert!(text(&terminal).contains("main.rs"));
         for cell in &terminal.backend().buffer().content {
@@ -641,6 +739,139 @@ mod tests {
     }
 
     #[test]
+    fn light_palette_has_readable_text_on_white_and_off_white() {
+        fn luminance(color: Color) -> f64 {
+            let Color::Rgb(r, g, b) = color else {
+                panic!("expected RGB")
+            };
+            let linear = |v: u8| {
+                let v = f64::from(v) / 255.0;
+                if v <= 0.04045 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+        }
+        let theme = Theme::new(Palette::Light);
+        let mut styles = vec![theme.accent, theme.muted, theme.warning];
+        for name in [
+            "main.rs",
+            "Cargo.toml",
+            "README.md",
+            "photo.png",
+            "backup.zip",
+            "other",
+        ] {
+            styles.push(theme.entry_style(&Entry::file(PathBuf::from(name), false)));
+        }
+        styles.push(theme.entry_style(&Entry::with_kind(
+            PathBuf::from("link"),
+            true,
+            EntryKind::UnresolvedLink,
+        )));
+        for style in styles {
+            for background in [Color::Rgb(255, 255, 255), Color::Rgb(245, 245, 245)] {
+                let ratio = (luminance(background) + 0.05) / (luminance(style.fg.unwrap()) + 0.05);
+                assert!(ratio >= 4.5, "insufficient text contrast: {ratio}");
+            }
+        }
+        let ratio = (luminance(theme.selected.bg.unwrap()) + 0.05)
+            / (luminance(theme.selected.fg.unwrap()) + 0.05);
+        assert!(ratio >= 4.5);
+    }
+
+    #[test]
+    fn short_and_narrow_help_can_reach_every_instruction_with_a_fixed_close_hint() {
+        for (width, height) in [(20, 9), (40, 12), (80, 12), (120, 24)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            let mut model = mixed_model();
+            model.help = true;
+            let mut seen = String::new();
+            let mut offset = 0;
+            loop {
+                model.help_offset = offset;
+                terminal
+                    .draw(|frame| draw(frame, &mut model, Theme::new(Palette::Terminal), false))
+                    .unwrap();
+                let rendered = text(&terminal);
+                assert!(rendered.contains("Esc / ? close"));
+                seen.push_str(&rendered);
+                if model.help_offset < offset {
+                    break;
+                }
+                offset += 1;
+            }
+            for instruction in [
+                "Ctrl-F",
+                "Ctrl-R",
+                "Ctrl-L",
+                "Ctrl-G",
+                "grapheme",
+                "executed.",
+            ] {
+                assert!(
+                    seen.contains(instruction),
+                    "{instruction} unavailable at {width}x{height}"
+                );
+            }
+            model.help_offset = usize::MAX;
+            terminal
+                .draw(|frame| draw(frame, &mut model, Theme::new(Palette::Terminal), false))
+                .unwrap();
+            assert!(text(&terminal).contains("executed."));
+            assert!(model.help_offset < usize::MAX);
+            let mut larger = Terminal::new(TestBackend::new(120, 24)).unwrap();
+            larger
+                .draw(|frame| draw(frame, &mut model, Theme::new(Palette::Terminal), false))
+                .unwrap();
+            assert_eq!(model.help_offset, 0);
+        }
+        for width in 16..72 {
+            assert!(
+                help_lines(width)
+                    .iter()
+                    .all(|line| UnicodeWidthStr::width(line.as_str()) <= width)
+            );
+        }
+    }
+
+    #[test]
+    fn preview_marks_overflow_after_visibility_filtering() {
+        for height in [9, 12, 24] {
+            let mut terminal = Terminal::new(TestBackend::new(120, height)).unwrap();
+            let mut model = mixed_model();
+            model.preview_path = model.selected_directory();
+            model.preview = Some(Arc::new(Listing {
+                entries: (0..40)
+                    .map(|index| {
+                        Entry::new(PathBuf::from(format!("/code/app/child-{index:02}")), false)
+                    })
+                    .collect(),
+                skipped: 0,
+            }));
+            terminal
+                .draw(|frame| draw(frame, &mut model, Theme::new(Palette::Terminal), true))
+                .unwrap();
+            assert!(text(&terminal).contains("… more entries"));
+            model.preview = Some(Arc::new(Listing {
+                entries: (0..40)
+                    .map(|index| {
+                        Entry::file(PathBuf::from(format!("/code/app/file-{index:02}")), false)
+                    })
+                    .collect(),
+                skipped: 0,
+            }));
+            model.toggle_files();
+            terminal
+                .draw(|frame| draw(frame, &mut model, Theme::new(Palette::Terminal), true))
+                .unwrap();
+            assert!(!text(&terminal).contains("… more entries"));
+        }
+    }
+
+    #[test]
     fn next_directory_shows_files_but_file_details_never_show_stale_listing() {
         let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
         let mut model = mixed_model();
@@ -653,18 +884,18 @@ mod tests {
             skipped: 0,
         }));
         terminal
-            .draw(|frame| draw(frame, &mut model, Theme::new(false), true))
+            .draw(|frame| draw(frame, &mut model, Theme::new(Palette::Dark), true))
             .unwrap();
         assert!(text(&terminal).contains("cover.webp"));
         model.toggle_files();
         terminal
-            .draw(|frame| draw(frame, &mut model, Theme::new(false), true))
+            .draw(|frame| draw(frame, &mut model, Theme::new(Palette::Dark), true))
             .unwrap();
         assert!(!text(&terminal).contains("cover.webp"));
         model.toggle_files();
         model.move_selection(2);
         terminal
-            .draw(|frame| draw(frame, &mut model, Theme::new(false), true))
+            .draw(|frame| draw(frame, &mut model, Theme::new(Palette::Dark), true))
             .unwrap();
         let rendered = text(&terminal);
         assert!(rendered.contains("DETAILS"));
@@ -681,7 +912,7 @@ mod tests {
             skipped: 0,
         }));
         terminal
-            .draw(|frame| draw(frame, &mut model, Theme::new(false), false))
+            .draw(|frame| draw(frame, &mut model, Theme::new(Palette::Dark), false))
             .unwrap();
         assert!(!text(&terminal).contains('\x1b'));
         assert!(text(&terminal).contains("ii"));
@@ -693,12 +924,12 @@ mod tests {
             let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
             let mut model = mixed_model();
             terminal
-                .draw(|frame| draw(frame, &mut model, Theme::new(true), false))
+                .draw(|frame| draw(frame, &mut model, Theme::new(Palette::Terminal), false))
                 .unwrap();
             assert!(text(&terminal).contains("Tab"));
             model.move_selection(1);
             terminal
-                .draw(|frame| draw(frame, &mut model, Theme::new(true), false))
+                .draw(|frame| draw(frame, &mut model, Theme::new(Palette::Terminal), false))
                 .unwrap();
             assert!(!text(&terminal).contains("Tab"));
         }
@@ -723,7 +954,7 @@ mod tests {
             ..crate::deep::Progress::default()
         });
         terminal
-            .draw(|frame| draw(frame, &mut model, Theme::new(false), false))
+            .draw(|frame| draw(frame, &mut model, Theme::new(Palette::Dark), false))
             .unwrap();
         let rendered = text(&terminal);
         assert!(rendered.contains("DEEP SEARCH"));

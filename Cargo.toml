@@ -1,13 +1,23 @@
 [package]
-name = "ii"
+name = "in-i"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
-description = "Two taps. Any directory. A keyboard-first terminal navigator."
+description = "in i (ii): a keyboard-first terminal directory navigator with shell integration."
 license = "MIT"
 repository = "https://github.com/Mik-pe/ii"
 readme = "README.md"
-publish = true
+publish = ["crates-io"]
+keywords = ["navigation", "terminal", "directory", "shell", "cli"]
+categories = ["command-line-utilities"]
+include = ["src/**", "shell/**", "tests/**", "examples/**", "benches/**", "scripts/**", "docs/**", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE", "CONTRIBUTING.md", "rust-toolchain.toml"]
+
+[lib]
+name = "ii"
+
+[[bin]]
+name = "ii"
+path = "src/main.rs"
 
 [dependencies]
 crossterm = "0.29"
