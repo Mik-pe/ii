@@ -55,6 +55,8 @@ fn main() {
     [IO.File]::WriteAllText($source, $fixture)
     & rustc --edition=2024 $source -o (Join-Path $temporary 'ii.exe')
     if ($LASTEXITCODE -ne 0) { throw 'Could not build shell protocol fixture' }
+    # Keep both executables on PATH: the function must use the first match,
+    # rather than trying to invoke the array returned by Get-Command.
     $env:PATH = "$temporary$([IO.Path]::PathSeparator)$env:PATH"
     $env:II_POWERSHELL_TEST_TARGET = $target
     foreach ($arguments in @(@('--hidden', 'init'), @('--', 'init'))) {
