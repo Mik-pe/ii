@@ -6,9 +6,13 @@ Remove-Alias -Name ii -Scope Global -Force -ErrorAction SilentlyContinue
 
 function global:ii {
     $binary = (Get-Command ii.exe -CommandType Application -ErrorAction Stop).Source
+    if ($args.Count -gt 0 -and $args[0] -eq 'init') {
+        & $binary @args
+        return
+    }
     foreach ($argument in $args) {
         if ($argument -eq '--') { break }
-        if ($argument -in @('init', '-h', '--help', '-V', '--version', '--print0')) {
+        if ($argument -in @('-h', '--help', '-V', '--version', '--print0')) {
             & $binary @args
             return
         }

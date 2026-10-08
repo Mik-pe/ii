@@ -12,7 +12,7 @@ use ii::deep::{Controller, Progress};
 use ii::filesystem::Scanner;
 use ii::filter::safe_label;
 use ii::model::Model;
-use ii::ui::{self, Theme};
+use ii::ui::{self, Palette, Theme};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::env;
 use std::ffi::OsString;
@@ -22,7 +22,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-const HELP: &str = "ii — two taps, any directory\n\nUSAGE\n    ii [OPTIONS] [PATH]\n    ii init <bash|zsh|fish|powershell>\n\nOPTIONS\n    -a, --hidden       Show hidden entries\n        --dirs-only    Start with files hidden (Ctrl-F toggles)\n        --no-preview   Use a single directory pane\n        --no-color     Use your terminal colors (also honors NO_COLOR)\n        --print0       Terminate the selected path with NUL (for scripts)\n    -h, --help         Print this help\n    -V, --version      Print the version\n        --             Treat the remaining argument as a path\n\nKEYS\n    ↑↓ select   Tab / → open folder   ← parent   Enter cd here\n    Type to filter folders and files. Ctrl-F shows/hides files. Ctrl-R searches descendant folders.\n    In deep search: Tab or Enter opens the selected result in the UI; Esc returns to browsing.\n    Files have name-based colors and type labels; they are never opened or executed.\n    Esc clears the filter, then cancels. Ctrl-C always cancels.\n    . toggles hidden entries. Ctrl-L refreshes. ? opens help.\n\nSHELL SETUP (once in your shell profile)\n    bash:       eval \"$(ii init bash)\"\n    zsh:        eval \"$(ii init zsh)\"\n    fish:       ii init fish | source\n    PowerShell: ii.exe init powershell | Out-String | Invoke-Expression\n\nPowerShell setup replaces the built-in ii alias for Invoke-Item.\nThe UI uses stderr. A successful selection writes only the raw absolute path\n(with no trailing newline) to stdout. Cancellation exits 130 with no path.\nA subprocess cannot change its parent directory: install the shell function.\n";
+const HELP: &str = "ii — two taps, any directory\n\nUSAGE\n    ii [OPTIONS] [PATH]\n    ii init <bash|zsh|fish|powershell>\n\nOPTIONS\n    -a, --hidden       Show hidden entries\n        --dirs-only    Start with files hidden (Ctrl-F toggles)\n        --no-preview   Use a single directory pane\n        --theme MODE   terminal (default), dark, or light palette\n        --no-color     Use terminal defaults (also honors NO_COLOR)\n        --print0       Terminate the selected path with NUL (for scripts)\n    -h, --help         Print this help\n    -V, --version      Print the version\n        --             Treat the remaining argument as a path\n\nKEYS\n    ↑↓ select   Tab / → open folder   ← parent   Enter cd here\n    Type to filter folders and files. Ctrl-F shows/hides files. Ctrl-R searches descendant folders.\n    In deep search: Tab or Enter opens the selected result in the UI; Esc returns to browsing.\n    Files have name-based colors and type labels; they are never opened or executed.\n    Esc clears the filter, then cancels. Ctrl-C always cancels.\n    . toggles hidden entries. Ctrl-L refreshes without clearing the filter.\n    ? opens help. In help: arrows/PageUp/PageDown scroll, Esc or ? closes.\n\nSHELL SETUP (once in your shell profile)\n    bash:       eval \"$(ii init bash)\"\n    zsh:        eval \"$(ii init zsh)\"\n    fish:       ii init fish | source\n    PowerShell: ii.exe init powershell | Out-String | Invoke-Expression\n\nPowerShell setup replaces the built-in ii alias for Invoke-Item.\nThe UI uses stderr. A successful selection writes only the raw absolute path\n(with no trailing newline) to stdout. Cancellation exits 130 with no path.\nA subprocess cannot change its parent directory: install the shell function.\n";
 
 #[derive(Default)]
 struct Options {
@@ -31,6 +31,7 @@ struct Options {
     dirs_only: bool,
     no_preview: bool,
     no_color: bool,
+    theme: Palette,
     print0: bool,
 }
 
@@ -58,7 +59,7 @@ fn parse(arguments: impl IntoIterator<Item = OsString>) -> Result<Command, Strin
     }
     let mut options = Options::default();
     let mut positional = false;
-    for argument in arguments {
+    while let Some(argument) = arguments.next() {
         if !positional {
             match argument.to_str() {
                 Some("--") => {
@@ -89,6 +90,17 @@ fn parse(arguments: impl IntoIterator<Item = OsString>) -> Result<Command, Strin
                     options.no_color = true;
                     continue;
                 }
+                Some("--theme") => {
+                    let value = arguments
+                        .next()
+                        .ok_or("--theme requires dark, light, or terminal")?;
+                    options.theme = parse_theme(&value)?;
+                    continue;
+                }
+                Some(flag) if flag.starts_with("--theme=") => {
+                    options.theme = parse_theme(&OsString::from(&flag[8..]))?;
+                    continue;
+                }
                 Some("--print0") => {
                     options.print0 = true;
                     continue;
@@ -104,6 +116,18 @@ fn parse(arguments: impl IntoIterator<Item = OsString>) -> Result<Command, Strin
         }
     }
     Ok(Command::Run(options))
+}
+
+fn parse_theme(value: &std::ffi::OsStr) -> Result<Palette, String> {
+    match value.to_str() {
+        Some("dark") => Ok(Palette::Dark),
+        Some("light") => Ok(Palette::Light),
+        Some("terminal") => Ok(Palette::Terminal),
+        _ => Err(format!(
+            "unknown theme: {}; use dark, light, or terminal",
+            safe_label(&value.to_string_lossy())
+        )),
+    }
 }
 
 static TERMINAL_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -168,8 +192,17 @@ fn key_intent(model: &mut Model, key: KeyEvent, page: isize, home: Option<&Path>
         return Intent::Cancel;
     }
     if model.help {
-        if matches!(key.code, KeyCode::Esc | KeyCode::Char('?')) {
-            model.help = false;
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('?') => model.help = false,
+            KeyCode::Up => model.help_offset = model.help_offset.saturating_sub(1),
+            KeyCode::Down => model.help_offset = model.help_offset.saturating_add(1),
+            KeyCode::PageUp => model.help_offset = model.help_offset.saturating_sub(page as usize),
+            KeyCode::PageDown => {
+                model.help_offset = model.help_offset.saturating_add(page as usize)
+            }
+            KeyCode::Home => model.help_offset = 0,
+            KeyCode::End => model.help_offset = usize::MAX,
+            _ => {}
         }
         return Intent::None;
     }
@@ -222,7 +255,10 @@ fn key_intent(model: &mut Model, key: KeyEvent, page: isize, home: Option<&Path>
         KeyCode::Enter => return Intent::Finish,
         KeyCode::Esc if model.query.is_empty() => return Intent::Cancel,
         KeyCode::Esc => model.clear_query(),
-        KeyCode::Char('?') if model.query.is_empty() => model.help = true,
+        KeyCode::Char('?') if model.query.is_empty() => {
+            model.help = true;
+            model.help_offset = 0;
+        }
         KeyCode::Char('.') if model.query.is_empty() => model.toggle_hidden(),
         KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::ALT) => {
             model.push_query(&ch.to_string())
@@ -280,7 +316,11 @@ fn run(options: &Options) -> io::Result<Option<PathBuf>> {
     let mut dirty = true;
     let mut size = terminal.size()?;
     let theme = Theme::new(
-        options.no_color || env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty()),
+        if options.no_color || env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty()) {
+            Palette::Terminal
+        } else {
+            options.theme
+        },
     );
 
     loop {
@@ -386,12 +426,12 @@ fn run(options: &Options) -> io::Result<Option<PathBuf>> {
             Event::Key(key) if key.kind != KeyEventKind::Release => {
                 finish = false;
                 dirty = true;
-                key_intent(
-                    &mut model,
-                    key,
-                    ui::page_size(size.height) as isize,
-                    home.as_deref(),
-                )
+                let page = if model.help {
+                    ui::help_page_size(size.width, size.height)
+                } else {
+                    ui::page_size(size.height)
+                };
+                key_intent(&mut model, key, page as isize, home.as_deref())
             }
             Event::Paste(text) if !model.help => {
                 finish = false;
@@ -484,6 +524,62 @@ mod tests {
         assert!(options.hidden);
         assert!(options.dirs_only);
         assert_eq!(options.path.unwrap(), PathBuf::from("-folder"));
+    }
+
+    #[test]
+    fn themes_are_explicit_and_unknown_or_missing_values_are_errors() {
+        for (arguments, palette) in [
+            (vec![], Palette::Terminal),
+            (vec!["--theme", "light"], Palette::Light),
+            (vec!["--theme=dark"], Palette::Dark),
+            (vec!["--theme=terminal"], Palette::Terminal),
+        ] {
+            let Command::Run(options) = parse(arguments.into_iter().map(OsString::from)).unwrap()
+            else {
+                panic!("expected navigation")
+            };
+            assert_eq!(options.theme, palette);
+        }
+        for arguments in [
+            vec!["--theme"],
+            vec!["--theme", "unknown"],
+            vec!["--theme="],
+        ] {
+            assert!(parse(arguments.into_iter().map(OsString::from)).is_err());
+        }
+    }
+
+    #[test]
+    fn help_scrolling_and_closing_preserve_the_browsing_selection() {
+        let mut model = Model::new(PathBuf::from("/code"), false);
+        model.complete_navigation(Arc::new(Listing {
+            entries: vec![Entry::new(PathBuf::from("/code/app"), false)],
+            skipped: 0,
+        }));
+        let selected = model.selected_path();
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        key_intent(&mut model, key(KeyCode::Char('?')), 4, None);
+        for (code, offset) in [
+            (KeyCode::Down, 1),
+            (KeyCode::PageDown, 5),
+            (KeyCode::PageUp, 1),
+            (KeyCode::Up, 0),
+            (KeyCode::End, usize::MAX),
+            (KeyCode::Home, 0),
+        ] {
+            assert!(matches!(
+                key_intent(&mut model, key(code), 4, None),
+                Intent::None
+            ));
+            assert_eq!(model.help_offset, offset);
+            assert_eq!(model.selected_path(), selected);
+        }
+        assert!(matches!(
+            key_intent(&mut model, key(KeyCode::Esc), 4, None),
+            Intent::None
+        ));
+        assert!(!model.help);
+        assert_eq!(model.selected_path(), selected);
     }
 
     #[test]

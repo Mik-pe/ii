@@ -62,6 +62,8 @@ struct Location {
     path: PathBuf,
     listing: Arc<Listing>,
     selected: Option<PathBuf>,
+    query: String,
+    offset: usize,
 }
 
 /// Recomputed only when visibility changes, never on every arrow key or render.
@@ -75,8 +77,6 @@ pub struct Counts {
 /// Transient search view; results never enter the local listing cache.
 pub struct DeepState {
     local: Location,
-    local_query: String,
-    local_offset: usize,
     pub progress: Progress,
 }
 
@@ -93,6 +93,7 @@ pub struct Model {
     pub loading: bool,
     pub message: Option<String>,
     pub help: bool,
+    pub help_offset: usize,
     pub deep: Option<DeepState>,
     deep_revision: u64,
     pub preview_path: Option<PathBuf>,
@@ -120,6 +121,7 @@ impl Model {
             loading: true,
             message: None,
             help: false,
+            help_offset: 0,
             deep: None,
             deep_revision: 0,
             preview_path: None,
@@ -147,9 +149,9 @@ impl Model {
                 path: self.cwd.clone(),
                 listing: Arc::clone(listing),
                 selected: self.selected_path(),
+                query: self.query.clone(),
+                offset: self.offset,
             },
-            local_query: self.query.clone(),
-            local_offset: self.offset,
             progress: Progress::default(),
         });
         self.refresh_deep();
@@ -159,10 +161,10 @@ impl Model {
         let Some(deep) = self.deep.take() else { return };
         self.cwd = deep.local.path;
         self.listing = Some(deep.local.listing);
-        self.query = deep.local_query;
+        self.query = deep.local.query;
         self.message = None;
         self.rebuild(deep.local.selected);
-        self.offset = deep.local_offset;
+        self.offset = deep.local.offset;
     }
 
     pub fn refresh_deep(&mut self) {
@@ -275,6 +277,8 @@ impl Model {
     /// Show cached contents immediately; a worker always revalidates the directory.
     pub fn begin_navigation(&mut self, path: PathBuf, preferred: Option<PathBuf>) {
         self.leave_deep();
+        let refresh = path == self.cwd;
+        let offset = if refresh { self.offset } else { 0 };
         self.remember();
         if !self.loading
             && let Some(listing) = &self.listing
@@ -283,6 +287,8 @@ impl Model {
                 path: self.cwd.clone(),
                 listing: Arc::clone(listing),
                 selected: self.selected_path(),
+                query: self.query.clone(),
+                offset: self.offset,
             });
         }
         self.preferred = preferred.or_else(|| {
@@ -292,29 +298,38 @@ impl Model {
                 .map(|(_, selected)| selected.clone())
         });
         self.cwd = path;
-        self.listing = self.cache.get(&self.cwd);
+        self.listing = if refresh {
+            self.listing.clone()
+        } else {
+            self.cache.get(&self.cwd)
+        };
         self.loading = true;
         self.message = None;
-        self.query.clear();
-        self.offset = 0;
+        if !refresh {
+            self.query.clear();
+        }
         self.rebuild(self.preferred.clone());
+        self.offset = offset;
     }
 
     pub fn complete_navigation(&mut self, listing: Arc<Listing>) {
+        let offset = self.offset;
         let preferred = self.selected_path().or_else(|| self.preferred.take());
         self.cache.insert(self.cwd.clone(), Arc::clone(&listing));
         self.listing = Some(listing);
         self.loading = false;
         self.fallback = None;
         self.rebuild(preferred);
+        self.offset = offset;
     }
 
     pub fn fail_navigation(&mut self, error: String) {
         if let Some(previous) = self.fallback.take() {
             self.cwd = previous.path;
             self.listing = Some(previous.listing);
-            self.query.clear();
+            self.query = previous.query;
             self.rebuild(previous.selected);
+            self.offset = previous.offset;
         } else {
             self.listing = None;
             self.visible.clear();
@@ -616,6 +631,70 @@ mod tests {
         assert!(!model.loading);
         assert_eq!(model.message.as_deref(), Some("Permission denied"));
         assert!(model.selected_entry().is_some());
+    }
+
+    #[test]
+    fn refresh_preserves_filter_selection_and_visible_page() {
+        let root = PathBuf::from("/code");
+        let names: Vec<_> = (0..100).map(|index| format!("app-{index:03}")).collect();
+        let names: Vec<_> = names.iter().map(String::as_str).collect();
+        let original = listing(&root, &names);
+        let mut model = Model::new(root.clone(), false);
+        model.complete_navigation(Arc::clone(&original));
+        model.push_query("ap");
+        model.move_selection(37);
+        let selected = model.selected_path();
+        let page = model.viewport(5);
+        model.begin_navigation(root.clone(), selected.clone());
+        assert!(model.loading);
+        assert_eq!(model.query, "ap");
+        assert_eq!(model.viewport(5), page);
+        assert_eq!(model.selected_path(), selected);
+
+        let mut updated = original.as_ref().clone();
+        updated
+            .entries
+            .push(Entry::new(root.join("app-new"), false));
+        model.complete_navigation(Arc::new(updated));
+        assert_eq!(model.query, "ap");
+        assert_eq!(model.selected_path(), selected);
+        assert_eq!(model.viewport(5), page);
+        assert_eq!(model.counts.folders, 101);
+    }
+
+    #[test]
+    fn failed_navigation_restores_filtered_view_and_scroll_after_chained_requests() {
+        let root = PathBuf::from("/code");
+        let mut model = Model::new(root.clone(), false);
+        model.complete_navigation(Arc::new(Listing {
+            entries: (0..40)
+                .map(|index| Entry::new(root.join(format!("app-{index:03}")), false))
+                .collect(),
+            skipped: 0,
+        }));
+        model.push_query("ap");
+        model.move_selection(25);
+        let selected = model.selected_path();
+        let page = model.viewport(5);
+        model.begin_navigation(root.join("missing"), None);
+        model.begin_navigation(root.join("also-missing"), None);
+        model.fail_navigation("directory disappeared".into());
+        assert_eq!(model.cwd, root);
+        assert_eq!(model.query, "ap");
+        assert_eq!(model.selected_path(), selected);
+        assert_eq!(model.viewport(5), page);
+        assert!(!model.loading);
+    }
+
+    #[test]
+    fn refresh_revalidates_a_removed_selection_without_losing_the_filter() {
+        let mut model = model();
+        model.push_query("tl");
+        let root = model.cwd.clone();
+        model.begin_navigation(root.clone(), model.selected_path());
+        model.complete_navigation(listing(&root, &["toolbox"]));
+        assert_eq!(model.query, "tl");
+        assert_eq!(model.selected_path(), Some(root.join("toolbox")));
     }
 
     #[test]

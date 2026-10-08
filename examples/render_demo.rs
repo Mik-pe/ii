@@ -2,7 +2,7 @@
 //! cargo run --locked --example render_demo > docs/assets/demo.svg
 use ii::filesystem::{Entry, Listing};
 use ii::model::Model;
-use ii::ui::{self, Theme};
+use ii::ui::{self, Palette, Theme};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::style::{Color, Modifier};
@@ -58,7 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         skipped: 0,
     }));
     let mut terminal = Terminal::new(TestBackend::new(120, 24))?;
-    terminal.draw(|frame| ui::draw(frame, &mut model, Theme::new(false), true))?;
+    terminal.draw(|frame| ui::draw(frame, &mut model, Theme::new(Palette::Dark), true))?;
     let mut out = io::BufWriter::new(io::stdout().lock());
     writeln!(
         out,
