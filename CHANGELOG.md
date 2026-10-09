@@ -4,7 +4,8 @@
 
 - Update installation documentation to reflect the published crates.io package.
 - Document repeatable releases, version updates and acceptance of the exact installed version.
-- Include these release notes in the crate package.
+- Include these release notes in crate and binary packages.
+- Make terminal tests wait for a directory row rather than matching the startup path before its scan completes.
 
 There are no runtime behavior or dependency changes from 0.1.0. The package remains `in-i`, with the `ii` command and library.
 
