@@ -55,7 +55,7 @@ Dependencies are locked for reproducible application builds. Keep Cargo.lock com
 
 The registry package is `in-i`; its installed executable and library remain `ii`. Do not publish under the unrelated `ii` or `ini` registry names. The existing MIT license is included unchanged.
 
-Before the first release, confirm the name is still available on crates.io and that your account has publishing credentials (`cargo login`, or a scoped token supplied through Cargo's credential provider). A local dry run checks packaging/building; it does not reserve a name, verify account ownership, or upload a release.
+Before each release, check the current crates.io versions and choose a new, unpublished version. Update the package version in Cargo.toml and its entry in Cargo.lock, and record the changes in CHANGELOG.md. Confirm your account has publishing credentials (`cargo login`, or a scoped token supplied through Cargo's credential provider). A local dry run checks packaging/building; it does not verify publishing rights or upload a release.
 
 Run the checks above, then:
 
@@ -64,18 +64,19 @@ cargo package --locked --list
 cargo publish --locked --dry-run
 ```
 
-From the reviewed, merged release commit, publish deliberately:
+Review the package file list and ensure it contains the release notes, source and shell integrations. Wait for CI on the exact PR head, merge the release PR, and check out the clean merged commit. From that commit, publish deliberately:
 
 ```sh
 cargo publish --locked
 ```
 
-Verify installation into an isolated root after the registry index has updated:
+Verify the exact published version into a fresh isolated root after the registry index has updated (replace `0.1.1` below with the release version):
 
 ```sh
-cargo install in-i --locked --root /tmp/in-i-install
+cargo install in-i --version 0.1.1 --locked --root /tmp/in-i-install
 /tmp/in-i-install/bin/ii --version
 /tmp/in-i-install/bin/ii init bash
+python3 scripts/test_pty.py /tmp/in-i-install/bin/ii  # Unix
 ```
 
 CI verifies the packaged build with a dry run. It never publishes automatically. Keep the package name, binary target, lockfile, README and package contents in sync.

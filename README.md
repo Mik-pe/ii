@@ -27,7 +27,7 @@ Use a current stable Rust toolchain. The crates.io package is named **`in-i`** (
 cargo install in-i --locked
 ```
 
-Until the first crates.io release is published, or to install the latest repository version:
+To install the latest repository version:
 
 ```sh
 cargo install --git https://github.com/Mik-pe/ii --locked
@@ -207,7 +207,7 @@ cargo run --locked --example render_demo > docs/assets/demo.svg
 
 CI builds/tests on Linux, macOS, and Windows and checks Rust 1.88 compatibility. Unix PTY tests exercise real key events, file visibility, resolved start paths, explicit deep search, file-navigation guards, cancellation, and terminal restoration. Shell tests cover quoting, Unicode, trailing newlines, and error handling. Windows tests cover PowerShell alias resolution, initialization, and informational commands; full interactive Windows console behavior still needs separate validation.
 
-See [architecture](https://github.com/Mik-pe/ii/blob/main/docs/ARCHITECTURE.md) and [contributing](https://github.com/Mik-pe/ii/blob/main/CONTRIBUTING.md). This is an initial implementation, not a declared stable release.
+See [architecture](https://github.com/Mik-pe/ii/blob/main/docs/ARCHITECTURE.md) and [contributing](https://github.com/Mik-pe/ii/blob/main/CONTRIBUTING.md). The published 0.1.x releases are early releases; the library API may change before 1.0. See [release notes](https://github.com/Mik-pe/ii/blob/main/CHANGELOG.md).
 
 ## License
 
