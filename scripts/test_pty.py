@@ -146,7 +146,7 @@ class Session:
 
 class TerminalIntegration(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
+        self.temporary = tempfile.TemporaryDirectory(prefix='ii-app-')
         self.root = Path(self.temporary.name).resolve()
         for directory in ['app/src', 'app/tests', 'notes', 'tools/lib']:
             (self.root / directory).mkdir(parents=True, exist_ok=True)
@@ -160,7 +160,9 @@ class TerminalIntegration(unittest.TestCase):
     def session(self, path=None, *options, preview=False):
         session = Session(path or self.root, *options, preview=preview)
         self.sessions.append(session)
-        session.expect(b'app' if path is None else (b'FOLDERS' if '--dirs-only' in options else b'CONTENTS'))
+        # The header appears before scanning finishes and can itself contain 'app'.
+        # Wait for the rendered directory row before sending browsing/search keys.
+        session.expect(b'app/' if path is None else (b'FOLDERS' if '--dirs-only' in options else b'CONTENTS'))
         return session
 
     def search(self, session, query):

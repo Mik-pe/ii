@@ -1,6 +1,6 @@
 [package]
 name = "in-i"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.88"
 description = "in i (ii): a keyboard-first terminal directory navigator with shell integration."
@@ -10,7 +10,7 @@ readme = "README.md"
 publish = ["crates-io"]
 keywords = ["navigation", "terminal", "directory", "shell", "cli"]
 categories = ["command-line-utilities"]
-include = ["src/**", "shell/**", "tests/**", "examples/**", "benches/**", "scripts/**", "docs/**", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE", "CONTRIBUTING.md", "rust-toolchain.toml"]
+include = ["src/**", "shell/**", "tests/**", "examples/**", "benches/**", "scripts/**", "docs/**", "Cargo.toml", "Cargo.lock", "README.md", "CHANGELOG.md", "LICENSE", "CONTRIBUTING.md", "rust-toolchain.toml"]
 
 [lib]
 name = "ii"
